@@ -6,6 +6,8 @@
 
 Support: [Buy Me A Coffee](https://buymeacoffee.com/xius)
 
+Interact with me on discord @ https://discord.gg/neEqeFFUsE for help related to all my addons!
+
 ---
 
 # PFQuest for WotLK 3.3.5
