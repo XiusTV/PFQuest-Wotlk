@@ -38,7 +38,6 @@ Both addons feature advanced quest capture systems, Questie-style tracker and to
 
 ### Performance Optimizations
 
-* **~70% CPU usage reduction** from optimized database queries
 * **Lazy loading** - Only loads needed data
 * **Efficient caching** - Reduces repeated lookups
 * **Optimized rendering** - Smoother map updates
