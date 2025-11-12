@@ -35,11 +35,6 @@ PartySync.pendingKeys = PartySync.pendingKeys or {}
 PartySync.remoteByKey = PartySync.remoteByKey or {}
 PartySync.lastRoster = PartySync.lastRoster or {}
 PartySync._broadcastHandle = PartySync._broadcastHandle or nil
-PartySync._yellState = PartySync._yellState or {
-  waiting = {},
-  timer = nil,
-  lastFlush = 0,
-}
 PartySync.initialized = PartySync.initialized or false
 
 local function ResolveDistribution()
@@ -50,33 +45,6 @@ local function ResolveDistribution()
     return "PARTY"
   end
   return nil
-end
-
-local badYellLocations = {
-  [1453] = true,
-  [1455] = true,
-  [1457] = true,
-  [1947] = true,
-  [1454] = true,
-  [1456] = true,
-  [1458] = true,
-  [1954] = true,
-  [1955] = true,
-  [1459] = true,
-  [1460] = true,
-  [1461] = true,
-  [1957] = true,
-}
-
-local function IsYellAllowed()
-  if pfQuest_config and pfQuest_config["disablepartyells"] == "1" then
-    return false
-  end
-  local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-  if mapId and badYellLocations[mapId] then
-    return false
-  end
-  return true
 end
 
 local function GetChannelId()
@@ -92,6 +60,19 @@ local function GetChannelId()
     end
   end
   return nil
+end
+
+-- Resolve distribution method, prioritizing custom channel first
+local function ResolveDistributionWithChannel()
+  -- First check if custom channel is available
+  local channelId = GetChannelId()
+  if channelId and channelId > 0 then
+    return "CHANNEL", channelId
+  end
+  
+  -- Fall back to PARTY/RAID if channel not available
+  local distribution = ResolveDistribution()
+  return distribution, nil
 end
 
 local function JoinCustomChannel()
@@ -130,24 +111,6 @@ local function JoinCustomChannel()
   return false
 end
 
-local function SerializeYellPayload(payload)
-  if not payload or not payload.k then return nil end
-  return table.concat({ payload.k, payload.q or 0, payload.o or 0, payload.f or 0, payload.r or 0 }, ":")
-end
-
-local function ParseYellPayload(message)
-  if not message then return nil end
-  local key, q, o, f, r = string.match(message, "^([^:]+):(%d+):(%d+):(%d+):(%d+)$")
-  if not key then return nil end
-  return {
-    k = key,
-    q = tonumber(q),
-    o = tonumber(o),
-    f = tonumber(f),
-    r = tonumber(r),
-  }
-end
-
 local function GetLocalPlayerName()
   local name = UnitName and UnitName("player")
   if name and name ~= "" then
@@ -184,63 +147,75 @@ local function BuildGroupRoster()
   return roster
 end
 
-local function BuildYellPayloadFromObjective(objective)
-  if not objective or not objective.key then return nil end
-  return {
-    k = objective.key,
-    q = objective.questId or 0,
-    o = objective.objectiveIndex or 0,
-    f = objective.fulfilled or 0,
-    r = objective.required or 0,
-  }
-end
-
-local function BuildYellPayloadFromEntry(entry)
-  if not entry or not entry.key then return nil end
-  return {
-    k = entry.key,
-    q = entry.questId or 0,
-    o = entry.objectiveIndex or 0,
-    f = entry.fulfilled or 0,
-    r = entry.required or 0,
-  }
-end
-
 function PartySync:SendFullSync(distribution, target)
   self:Initialize()
   if not self.initialized then return end
-  if not (self.serializer and self.SendCommMessage) then return end
-
-  distribution = distribution or (target and "WHISPER" or ResolveDistribution())
   
-  if not distribution then return end
-  if distribution == "WHISPER" and not target then return end
-
-  local objectiveCount = 0
-  if self.localObjectives then
-    for _ in pairs(self.localObjectives) do objectiveCount = objectiveCount + 1 end
-  end
-
-  for key, data in pairs(self.localObjectives) do
-    if type(data) == "table" then
-      local payload = {
-        v = self.version,
-        t = "obj",
-        p = self.subPrefix, -- Sub-prefix to identify our messages
-        key = key,
-        questId = data.questId,
-        objectiveIndex = data.objectiveIndex,
-        fulfilled = data.fulfilled,
-        required = data.required,
-        name = data.name,
-      }
-
-      local serialized = self.serializer:Serialize(payload)
-      if serialized and type(serialized) == "string" and #serialized > 0 then
-        if distribution == "WHISPER" then
+  -- If WHISPER is explicitly requested, use it
+  if distribution == "WHISPER" then
+    if not target or not (self.serializer and self.SendCommMessage) then return end
+    
+    for key, data in pairs(self.localObjectives) do
+      if type(data) == "table" then
+        local payload = {
+          v = self.version,
+          t = "obj",
+          p = self.subPrefix,
+          key = key,
+          questId = data.questId,
+          objectiveIndex = data.objectiveIndex,
+          fulfilled = data.fulfilled,
+          required = data.required,
+          name = data.name,
+        }
+        local serialized = self.serializer:Serialize(payload)
+        if serialized and type(serialized) == "string" and #serialized > 0 then
           self:SendCommMessage(self.prefix, serialized, "WHISPER", target)
-        else
-          self:SendCommMessage(self.prefix, serialized, distribution)
+        end
+      end
+    end
+    return
+  end
+  
+  -- Resolve distribution with channel priority
+  local dist, channelId = ResolveDistributionWithChannel()
+  if not dist then return end
+  
+  if dist == "CHANNEL" and channelId then
+    -- Send via custom channel using simple format
+    for key, data in pairs(self.localObjectives) do
+      if type(data) == "table" then
+        local payload = string.format("%s:%d:%d:%d:%d",
+          key,
+          data.questId or 0,
+          data.objectiveIndex or 0,
+          data.fulfilled or 0,
+          data.required or 0
+        )
+        local message = string.format("%s:%s", self.prefix, payload)
+        SendChatMessage(message, "CHANNEL", nil, channelId)
+      end
+    end
+  elseif dist == "PARTY" or dist == "RAID" then
+    -- Fall back to PARTY/RAID using AceComm
+    if not (self.serializer and self.SendCommMessage) then return end
+    
+    for key, data in pairs(self.localObjectives) do
+      if type(data) == "table" then
+        local payload = {
+          v = self.version,
+          t = "obj",
+          p = self.subPrefix,
+          key = key,
+          questId = data.questId,
+          objectiveIndex = data.objectiveIndex,
+          fulfilled = data.fulfilled,
+          required = data.required,
+          name = data.name,
+        }
+        local serialized = self.serializer:Serialize(payload)
+        if serialized and type(serialized) == "string" and #serialized > 0 then
+          self:SendCommMessage(self.prefix, serialized, dist)
         end
       end
     end
@@ -393,7 +368,6 @@ function PartySync:Initialize()
   self:RegisterEvent("PLAYER_ENTERING_WORLD", "HandlePlayerEnteringWorld")
   self:RegisterEvent("PARTY_MEMBERS_CHANGED", "CleanupGroupMembers")
   self:RegisterEvent("RAID_ROSTER_UPDATE", "CleanupGroupMembers")
-  self:RegisterEvent("CHAT_MSG_YELL", "HandleYell")
   self:RegisterEvent("CHAT_MSG_CHANNEL", "HandleChannel")
   
   -- Join custom channel for addon communication
@@ -416,18 +390,10 @@ function PartySync:RefreshFromConfig()
     if self._broadcastHandle and self.CancelTimer then
       self:CancelTimer(self._broadcastHandle)
     end
-    if self._yellState and self._yellState.timer and self.CancelTimer then
-      self:CancelTimer(self._yellState.timer)
-      self._yellState.timer = nil
-    end
     self._broadcastHandle = nil
     self.pendingKeys = {}
     self.localObjectives = {}
     self.remoteByKey = {}
-    if self._yellState then
-      self._yellState.waiting = {}
-      self._yellState.lastFlush = 0
-    end
   else
     self:Initialize()
     if self.initialized then
@@ -477,10 +443,7 @@ function PartySync:OnMetaProgress(meta, key, details)
       self.localObjectives[key] = payload
       self.pendingKeys[key] = "update"
       changed = true
-      if not distribution then
-        self:QueueYellUpdate(key, payload)
-      end
-      DebugPrint("local update", key, payload.fulfilled, payload.required, distribution or "YELL")
+      DebugPrint("local update", key, payload.fulfilled, payload.required, distribution or "CHANNEL")
       break
     end
   end
@@ -500,9 +463,6 @@ function PartySync:OnQuestRemoved(questId)
       self.localObjectives[key] = nil
       self.pendingKeys[key] = "remove"
       changed = true
-      if self._yellState and self._yellState.waiting then
-        self._yellState.waiting[key] = nil
-      end
     end
   end
 
@@ -535,56 +495,70 @@ function PartySync:FlushBroadcastQueue()
     return
   end
 
-  local distribution = ResolveDistribution()
+  -- Resolve distribution with channel priority
+  local distribution, channelId = ResolveDistributionWithChannel()
   if not distribution then
-    -- Use custom channel or yell fallback if available
-    local channelId = GetChannelId()
-    local hasChannel = channelId and channelId > 0
-    local yellAllowed = IsYellAllowed()
-    
-    if hasChannel or yellAllowed then
-      for key, action in pairs(self.pendingKeys) do
-        if action ~= "remove" then
-          local objective = self.localObjectives[key]
-          if objective then
-            self:QueueYellUpdate(key, objective)
-          end
-        end
-        self.pendingKeys[key] = nil
-      end
-      self:ScheduleYell()
-    else
-      -- No channel and yell disabled - just clear pending keys
-      self.pendingKeys = {}
-    end
+    -- No channel or party/raid available - clear pending keys
+    self.pendingKeys = {}
     return
   end
 
-  for key, action in pairs(self.pendingKeys) do
-    local payload
-    if action == "remove" or not self.localObjectives[key] then
-      payload = { v = self.version, t = "obj", p = self.subPrefix, key = key, remove = true }
-    else
-      local data = self.localObjectives[key]
-      payload = {
-        v = self.version,
-        t = "obj",
-        p = self.subPrefix, -- Sub-prefix to identify our messages
-        key = key,
-        questId = data.questId,
-        objectiveIndex = data.objectiveIndex,
-        fulfilled = data.fulfilled,
-        required = data.required,
-        name = data.name,
-      }
+  if distribution == "CHANNEL" and channelId then
+    -- Send via custom channel using simple format
+    for key, action in pairs(self.pendingKeys) do
+      if action ~= "remove" then
+        local objective = self.localObjectives[key]
+        if objective then
+          -- Use simple format: key:questId:objectiveIndex:fulfilled:required
+          local payload = string.format("%s:%d:%d:%d:%d",
+            key,
+            objective.questId or 0,
+            objective.objectiveIndex or 0,
+            objective.fulfilled or 0,
+            objective.required or 0
+          )
+          local message = string.format("%s:%s", self.prefix, payload)
+          SendChatMessage(message, "CHANNEL", nil, channelId)
+        end
+      end
+      self.pendingKeys[key] = nil
+    end
+  elseif distribution == "PARTY" or distribution == "RAID" then
+    -- Fall back to PARTY/RAID using AceComm
+    if not (self.serializer and self.SendCommMessage) then
+      self.pendingKeys = {}
+      return
     end
 
-    local serialized = self.serializer:Serialize(payload)
-    if serialized and type(serialized) == "string" and #serialized > 0 then
-      self:SendCommMessage(self.prefix, serialized, distribution)
-    end
+    for key, action in pairs(self.pendingKeys) do
+      local payload
+      if action == "remove" or not self.localObjectives[key] then
+        payload = { v = self.version, t = "obj", p = self.subPrefix, key = key, remove = true }
+      else
+        local data = self.localObjectives[key]
+        payload = {
+          v = self.version,
+          t = "obj",
+          p = self.subPrefix,
+          key = key,
+          questId = data.questId,
+          objectiveIndex = data.objectiveIndex,
+          fulfilled = data.fulfilled,
+          required = data.required,
+          name = data.name,
+        }
+      end
 
-    self.pendingKeys[key] = nil
+      local serialized = self.serializer:Serialize(payload)
+      if serialized and type(serialized) == "string" and #serialized > 0 then
+        self:SendCommMessage(self.prefix, serialized, distribution)
+      end
+
+      self.pendingKeys[key] = nil
+    end
+  else
+    -- Unknown distribution method - clear pending keys
+    self.pendingKeys = {}
   end
 end
 
@@ -858,74 +832,6 @@ function PartySync:OnCommReceived(prefix, message, distribution, sender)
   DebugPrint("remote update", sender, payload.key, payload.fulfilled, payload.required)
 end
 
-function PartySync:QueueYellUpdate(key, objective)
-  if not self._yellState then return end
-  if not key or not objective then return end
-  objective.key = objective.key or key
-  local payload = BuildYellPayloadFromObjective(objective)
-  if not payload then return end
-  self._yellState.waiting[key] = payload
-  self:ScheduleYell()
-end
-
-function PartySync:ScheduleYell()
-  if not self._yellState then return end
-  if self._yellState.timer then return end
-  
-  -- Allow if we have channel OR if yell is allowed
-  local channelId = GetChannelId()
-  local hasChannel = channelId and channelId > 0
-  local yellAllowed = IsYellAllowed()
-  
-  if not hasChannel and not yellAllowed then return end
-  if not next(self._yellState.waiting) then return end
-  
-  self._yellState.timer = self:ScheduleTimer("FlushYellQueue", 2)
-end
-
-function PartySync:FlushYellQueue()
-  if not self._yellState then return end
-  self._yellState.timer = nil
-  
-  -- Try to use custom channel first, fall back to YELL if channel not available
-  local channelId = GetChannelId()
-  local useChannel = channelId and channelId > 0
-  
-  if not useChannel and not IsYellAllowed() then
-    self._yellState.waiting = {}
-    return
-  end
-
-  local now = GetTime and GetTime() or 0
-  if now - (self._yellState.lastFlush or 0) < 2 then
-    self._yellState.timer = self:ScheduleTimer("FlushYellQueue", 2)
-    return
-  end
-
-  local key, payload = next(self._yellState.waiting)
-  if not key or not payload then
-    return
-  end
-
-  self._yellState.waiting[key] = nil
-  local serialized = SerializeYellPayload(payload)
-  if serialized then
-    local message = string.format("%s:%s", self.prefix, serialized)
-    if useChannel then
-      -- Send to custom channel
-      SendChatMessage(message, "CHANNEL", nil, channelId)
-    else
-      -- Fall back to YELL
-      SendChatMessage(message, "YELL")
-    end
-    self._yellState.lastFlush = now
-  end
-
-  if next(self._yellState.waiting) then
-    self._yellState.timer = self:ScheduleTimer("FlushYellQueue", 2)
-  end
-end
-
 function PartySync:StoreRemoteEntry(key, playerName, data)
   if not key or not playerName or not data then return end
   self.remoteByKey = self.remoteByKey or {}
@@ -954,27 +860,6 @@ function PartySync:RemoveRemoteEntry(key, playerName)
   end
 end
 
-function PartySync:HandleYell(_, message, sender)
-  if not self:IsEnabled() then return end
-  if not message or not sender then return end
-
-  local prefix, payloadText = string.match(message, "^(%S+):(.+)$")
-  if prefix ~= self.prefix then return end
-
-  sender = NormalizePlayerName(sender)
-  if sender == GetLocalPlayerName() then return end
-
-  local payload = ParseYellPayload(payloadText)
-  if not payload or not payload.k then return end
-
-  self:StoreRemoteEntry(payload.k, sender, {
-    questId = payload.q,
-    objectiveIndex = payload.o,
-    fulfilled = payload.f,
-    required = payload.r,
-  })
-end
-
 function PartySync:HandleChannel(_, message, sender, _, _, _, _, _, channelName)
   if not self:IsEnabled() then return end
   if not message or not sender then return end
@@ -988,14 +873,15 @@ function PartySync:HandleChannel(_, message, sender, _, _, _, _, _, channelName)
   sender = NormalizePlayerName(sender)
   if sender == GetLocalPlayerName() then return end
 
-  local payload = ParseYellPayload(payloadText)
-  if not payload or not payload.k then return end
+  -- Parse simple payload format: key:questId:objectiveIndex:fulfilled:required
+  local key, q, o, f, r = string.match(payloadText, "^([^:]+):(%d+):(%d+):(%d+):(%d+)$")
+  if not key then return end
 
-  self:StoreRemoteEntry(payload.k, sender, {
-    questId = payload.q,
-    objectiveIndex = payload.o,
-    fulfilled = payload.f,
-    required = payload.r,
+  self:StoreRemoteEntry(key, sender, {
+    questId = tonumber(q),
+    objectiveIndex = tonumber(o),
+    fulfilled = tonumber(f),
+    required = tonumber(r),
   })
 end
 
@@ -1017,20 +903,33 @@ function PartySync:NotifyFocusChange(action, questId)
   self:Initialize()
   if not self.initialized then return end
 
-  local distribution = ResolveDistribution()
+  -- Resolve distribution with channel priority
+  -- Note: Focus changes use AceComm (PARTY/RAID) for reliability, not channel
+  local distribution, channelId = ResolveDistributionWithChannel()
   if not distribution then return end
 
-  local payload = {
-    v = self.version,
-    t = "focus",
-    p = self.subPrefix, -- Sub-prefix to identify our messages
-    a = action,
-    q = tonumber(questId) or 0,
-  }
+  -- If channel is available, still prefer PARTY/RAID for focus (more reliable)
+  -- But if no party/raid, we can't send focus changes
+  if distribution == "CHANNEL" then
+    distribution = ResolveDistribution()
+    if not distribution then return end
+  end
 
-  local serialized = self.serializer:Serialize(payload)
-  if serialized and type(serialized) == "string" and #serialized > 0 then
-    self:SendCommMessage(self.prefix, serialized, distribution, nil, "NORMAL")
+  if distribution == "PARTY" or distribution == "RAID" then
+    if not (self.serializer and self.SendCommMessage) then return end
+    
+    local payload = {
+      v = self.version,
+      t = "focus",
+      p = self.subPrefix,
+      a = action,
+      q = tonumber(questId) or 0,
+    }
+
+    local serialized = self.serializer:Serialize(payload)
+    if serialized and type(serialized) == "string" and #serialized > 0 then
+      self:SendCommMessage(self.prefix, serialized, distribution, nil, "NORMAL")
+    end
   end
 end
 

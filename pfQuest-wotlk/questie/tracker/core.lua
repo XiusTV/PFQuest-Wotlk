@@ -97,6 +97,8 @@ end
 function QuestieTracker:SyncProfileFromConfig()
   EnsureConfig()
   local cfg = GetPfConfig()
+  -- Sync trackerEnabled from pfQuest config
+  Questie.db.profile.trackerEnabled = IsPfConfigEnabled("showtracker")
   Questie.db.profile.stickyDurabilityFrame = IsPfConfigEnabled("stickydurability")
   Questie.db.profile.stickyVoiceOverFrame = IsPfConfigEnabled("stickyvoiceover")
   Questie.db.profile.trackerFadeEnabled = IsPfConfigEnabled("trackerfade")
@@ -244,7 +246,17 @@ function TrackerBaseFrame.Initialize()
   local frame = CreateFrame("Frame", "QuestieTrackerBaseFrame", UIParent)
   local width, height = GetTrackerDimensions()
   frame:SetSize(width, height)
-  frame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -150)
+  
+  -- Restore saved position if available
+  local cfg = GetPfConfig()
+  if cfg.trackerpos and type(cfg.trackerpos) == "table" and #cfg.trackerpos >= 4 then
+    local point, relativeToName, relativePoint, xOfs, yOfs = cfg.trackerpos[1], cfg.trackerpos[2], cfg.trackerpos[3], cfg.trackerpos[4], cfg.trackerpos[5]
+    local relativeTo = relativeToName == "UIParent" and UIParent or _G[relativeToName] or UIParent
+    frame:SetPoint(point or "TOPLEFT", relativeTo, relativePoint or "TOPLEFT", xOfs or 20, yOfs or -150)
+  else
+    frame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -150)
+  end
+  
   frame:SetMovable(true)
   frame:SetClampedToScreen(true)
   frame:EnableMouse(true)
@@ -268,11 +280,18 @@ function TrackerBaseFrame.Initialize()
     if self.isMoving then
       self:StopMovingOrSizing()
       self.isMoving = false
+      -- Save tracker position
+      local point, relativeTo, relativePoint, xOfs, yOfs = self:GetPoint(1)
+      if point and relativeTo then
+        local cfg = GetPfConfig()
+        cfg.trackerpos = { point, relativeTo:GetName() or "UIParent", relativePoint, xOfs, yOfs }
+      end
     end
   end)
 
   local resizer = CreateFrame("Button", nil, frame)
-  resizer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 5)
+  -- Position resizer to avoid overlap with scrollbar (scrollbar is ~20px wide)
+  resizer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 5)
   resizer:SetSize(14, 14)
   resizer:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
   resizer:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
@@ -296,8 +315,10 @@ end
 
 local function CreateHeaderButton(parent, anchor, texturePath)
   local button = CreateFrame("Button", nil, parent)
-  button:SetSize(panelheight - 2, panelheight - 2)
+  button:SetSize(20, 20)  -- Increased from panelheight - 2 (14px) to 20px for better visibility
   button:SetNormalTexture(texturePath)
+  button:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
+  button:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
   button:SetPoint(anchor, -4, -1)
   return button
 end
@@ -314,9 +335,82 @@ function TrackerHeaderFrame.Initialize(parent)
 
   local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   title:SetPoint("LEFT", frame, "LEFT", 8, 0)
-  title:SetText("|cff33ffccQuestie Tracker|r")
+  title:SetText("|cff33ffccPFQuestie Tracker|r")
 
   frame.collapseButton = CreateHeaderButton(frame, "RIGHT", "Interface\\Buttons\\UI-Panel-CollapseButton-Up")
+  
+  -- Add click handler for collapse/minimize functionality
+  frame.collapseButton:SetScript("OnClick", function(self)
+    local cfg = GetPfConfig()
+    local isCollapsed = cfg["trackercollapsed"] == "1"
+    
+    -- Toggle collapsed state
+    cfg["trackercollapsed"] = isCollapsed and "0" or "1"
+    
+    -- Get base frame and current dimensions
+    local baseFrame = QuestieTracker.baseFrame
+    if not baseFrame then return end
+    
+    -- Get the collapse button's position relative to UIParent (screen coordinates)
+    -- This is the anchor point we want to keep fixed
+    local buttonX, buttonY = self:GetRight(), self:GetTop()
+    local uiParentX, uiParentY = UIParent:GetRight(), UIParent:GetTop()
+    local relativeX = buttonX - uiParentX
+    local relativeY = buttonY - uiParentY
+    
+    if cfg["trackercollapsed"] == "1" then
+      -- Collapse: Hide quest frame and resize base frame to header height only
+      if QuestieTracker.questFrame then
+        QuestieTracker.questFrame:Hide()
+      end
+      -- Store original height before collapsing
+      if not baseFrame._originalHeight then
+        baseFrame._originalHeight = baseFrame:GetHeight()
+      end
+      -- Store the button's screen position
+      if not baseFrame._originalButtonPos then
+        baseFrame._originalButtonPos = { relativeX, relativeY }
+      end
+      -- Clear all points and resize, then re-anchor at TOPRIGHT using button position
+      baseFrame:ClearAllPoints()
+      -- Set height first (before anchoring)
+      baseFrame:SetHeight(24)
+      -- Re-anchor at TOPRIGHT using button's screen position (button stays in place)
+      baseFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", relativeX, relativeY)
+      -- Hide resizer when collapsed
+      if baseFrame.resizer then
+        baseFrame.resizer:Hide()
+      end
+      self:SetNormalTexture("Interface\\Buttons\\UI-Panel-ExpandButton-Up")
+    else
+      -- Expand: Show quest frame and restore base frame height
+      if QuestieTracker.questFrame then
+        QuestieTracker.questFrame:Show()
+      end
+      -- Use stored button position if available, otherwise use current
+      local anchorX, anchorY
+      if baseFrame._originalButtonPos then
+        anchorX, anchorY = baseFrame._originalButtonPos[1], baseFrame._originalButtonPos[2]
+        baseFrame._originalButtonPos = nil
+      else
+        anchorX, anchorY = relativeX, relativeY
+      end
+      -- Clear all points, restore height, then re-anchor at TOPRIGHT (button stays in place)
+      baseFrame:ClearAllPoints()
+      -- Restore original height
+      if baseFrame._originalHeight then
+        baseFrame:SetHeight(baseFrame._originalHeight)
+        baseFrame._originalHeight = nil
+      end
+      -- Re-anchor at TOPRIGHT using button's screen position
+      baseFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", anchorX, anchorY)
+      -- Show resizer when expanded
+      if baseFrame.resizer then
+        baseFrame.resizer:Show()
+      end
+      self:SetNormalTexture("Interface\\Buttons\\UI-Panel-CollapseButton-Up")
+    end
+  end)
 
   frame.title = title
   TrackerHeaderFrame.frame = frame
@@ -449,6 +543,9 @@ function TrackerLinePool:ReleaseAll()
     if line.highlight then
       line.highlight:Hide()
     end
+    if line.focusText then
+      line.focusText:Hide()
+    end
     line.data = nil
     table.insert(self.lines, line)
   end
@@ -492,7 +589,41 @@ local function GetQuestItemButtons(questId, qlogid)
                 local _, _, itemIdStr = string.find(link, "item:(%d+)")
                 if itemIdStr then
                   local itemId = tonumber(itemIdStr)
-                  -- Check if we already added it
+                  -- Only add if item is usable
+                  if IsUsableItem(itemId) then
+                    -- Check if we already added it
+                    local found = false
+                    for _, existing in ipairs(items) do
+                      if existing.itemId == itemId then
+                        found = true
+                        break
+                      end
+                    end
+                    if not found then
+                      table.insert(items, {
+                        itemId = itemId,
+                        itemName = itemName,
+                        count = GetItemCount(itemId, nil, true) or 0,
+                      })
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+        
+        -- Also check equipped items
+        for slot = 1, 19 do
+          local link = GetInventoryItemLink("player", slot)
+          if link then
+            local linkItemName = string.match(link, "%[([^%]]+)%]")
+            if linkItemName and linkItemName == itemName then
+              local _, _, itemIdStr = string.find(link, "item:(%d+)")
+              if itemIdStr then
+                local itemId = tonumber(itemIdStr)
+                -- Only add if item is usable
+                if IsUsableItem(itemId) then
                   local found = false
                   for _, existing in ipairs(items) do
                     if existing.itemId == itemId then
@@ -512,34 +643,6 @@ local function GetQuestItemButtons(questId, qlogid)
             end
           end
         end
-        
-        -- Also check equipped items
-        for slot = 1, 19 do
-          local link = GetInventoryItemLink("player", slot)
-          if link then
-            local linkItemName = string.match(link, "%[([^%]]+)%]")
-            if linkItemName and linkItemName == itemName then
-              local _, _, itemIdStr = string.find(link, "item:(%d+)")
-              if itemIdStr then
-                local itemId = tonumber(itemIdStr)
-                local found = false
-                for _, existing in ipairs(items) do
-                  if existing.itemId == itemId then
-                    found = true
-                    break
-                  end
-                end
-                if not found then
-                  table.insert(items, {
-                    itemId = itemId,
-                    itemName = itemName,
-                    count = GetItemCount(itemId, nil, true) or 0,
-                  })
-                end
-              end
-            end
-          end
-        end
       end
     end
   end
@@ -551,7 +654,12 @@ function TrackerLinePool:GetItemButton()
   local button = table.remove(self.itemButtons)
   if not button then
     button = CreateFrame("Button", nil, self.container.content, "SecureActionButtonTemplate")
-    button:SetSize(16, 16)
+    -- Secure frames cannot have SetSize called during combat, use pcall to suppress errors
+    pcall(function()
+      if not InCombatLockdown or not InCombatLockdown() then
+        button:SetSize(16, 16)
+      end
+    end)
     button:SetFrameStrata("MEDIUM")
     
     button.icon = button:CreateTexture(nil, "ARTWORK")
@@ -695,6 +803,14 @@ local function DisableDefaultTracker()
   local frame = compat.QuestWatchFrame or WatchFrame
   if not frame then return end
 
+  -- Check if init.lua already set this up
+  if QuestieTracker._defaultTracker and QuestieTracker._defaultTracker.frame then
+    -- Already initialized, just ensure it's hidden
+    frame:SetParent(QuestieTracker._defaultTracker.hiddenParent)
+    frame:Hide()
+    return
+  end
+
   QuestieTracker._defaultTracker = QuestieTracker._defaultTracker or {}
   if not QuestieTracker._defaultTracker.frame then
     QuestieTracker._defaultTracker.frame = frame
@@ -722,12 +838,20 @@ end
 
 function QuestieTracker.Initialize()
   EnsureConfig()
+  
+  -- Sync config first to ensure trackerEnabled is up to date
+  QuestieTracker:SyncProfileFromConfig()
+
+  -- Double-check pfQuest config as well
+  local cfg = GetPfConfig()
+  if cfg["showtracker"] == "0" then
+    -- Explicitly disabled in pfQuest config, don't initialize
+    return
+  end
 
   if QuestieTracker.started or not Questie.db.profile.trackerEnabled then
     return
   end
-
-  QuestieTracker:SyncProfileFromConfig()
   local base = TrackerBaseFrame.Initialize()
   local header = TrackerHeaderFrame.Initialize(base)
   local quests = TrackerQuestFrame.Initialize(base, header)
@@ -743,6 +867,27 @@ function QuestieTracker.Initialize()
   QuestieTracker.baseFrame = base
   QuestieTracker.headerFrame = header
   QuestieTracker.questFrame = quests
+
+  -- Restore collapsed state if it was saved
+  local cfg = GetPfConfig()
+  if cfg["trackercollapsed"] == "1" and header.collapseButton then
+    quests:Hide()
+    -- Get the collapse button's position relative to UIParent (screen coordinates)
+    local buttonX, buttonY = header.collapseButton:GetRight(), header.collapseButton:GetTop()
+    local uiParentX, uiParentY = UIParent:GetRight(), UIParent:GetTop()
+    local relativeX = buttonX - uiParentX
+    local relativeY = buttonY - uiParentY
+    
+    -- Clear all points, resize, then re-anchor at TOPRIGHT using button position
+    base:ClearAllPoints()
+    base:SetHeight(24)
+    base:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", relativeX, relativeY)
+    -- Hide resizer when collapsed
+    if base.resizer then
+      base.resizer:Hide()
+    end
+    header.collapseButton:SetNormalTexture("Interface\\Buttons\\UI-Panel-ExpandButton-Up")
+  end
 
   if not QuestieTracker.eventFrame then
     local frame = CreateFrame("Frame")
@@ -897,66 +1042,98 @@ function QuestieTracker:Update()
         end
       end
 
+      -- Get quest items before creating the line (for inline positioning)
+      local questItems = {}
+      if entry.qlogid then
+        questItems = GetQuestItemButtons(entry.id, entry.qlogid)
+      end
+
+      -- Calculate button area width (for spacing text properly)
+      local buttonAreaWidth = 0
+      if #questItems > 0 then
+        local buttonCount = math.min(#questItems, 3)
+        buttonAreaWidth = buttonCount * 18 -- 16px button + 2px spacing each
+      end
+
+      -- Calculate focus prefix width (approximately 10 pixels for "▶ ")
+      local focusPrefixWidth = (focusPrefix and focusPrefix ~= "") and 10 or 0
+
       -- Apply color to both level number and title together
+      -- Format: [focus] [items] [level] Quest Name
       local questLine = string.format("%s|cff%s%s%s|r", focusPrefix, titleColor, levelText, entry.title)
       local titleLine = addLine(questLine, 0, {
         questId = entry.id,
         questTitle = entry.title,
       })
 
-      -- Add quest item buttons if quest has required items
-      if entry.qlogid then
-        local questItems = GetQuestItemButtons(entry.id, entry.qlogid)
-        if #questItems > 0 then
-          -- Create a container line for buttons (indented like objectives)
-          local buttonLine = addLine("", 12) -- Empty line with indent for buttons
-          buttonLine:SetHeight(16)
-          
-          -- Position buttons horizontally on this line
-          local buttonX = 0
-          for i, itemData in ipairs(questItems) do
-            if i <= 3 then -- Limit to 3 buttons per quest
-              local button = TrackerLinePool:GetItemButton()
-              button.itemId = itemData.itemId
-              button.line = buttonLine
-              
-              -- Get item texture (GetItemInfo may return nil if item not cached)
-              local name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture = GetItemInfo(itemData.itemId)
-              if not texture and link then
-                -- Try to get texture from link if direct call failed
-                local _, _, itemIdStr = string.find(link, "item:(%d+)")
-                if itemIdStr then
-                  name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture = GetItemInfo(tonumber(itemIdStr))
-                end
+      -- Add quest item buttons inline with quest name (before level text)
+      if #questItems > 0 then
+        -- Position buttons after focus prefix (if present)
+        local buttonX = focusPrefixWidth
+        
+        -- Position buttons to the left of the quest level text
+        for i, itemData in ipairs(questItems) do
+          if i <= 3 then -- Limit to 3 buttons per quest
+            local button = TrackerLinePool:GetItemButton()
+            button.itemId = itemData.itemId
+            button.line = titleLine
+            
+            -- Get item texture (GetItemInfo may return nil if item not cached)
+            local name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture = GetItemInfo(itemData.itemId)
+            if not texture and link then
+              -- Try to get texture from link if direct call failed
+              local _, _, itemIdStr = string.find(link, "item:(%d+)")
+              if itemIdStr then
+                name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture = GetItemInfo(tonumber(itemIdStr))
               end
-              if texture then
-                button.icon:SetTexture(texture)
-              else
-                -- Fallback: use a placeholder texture
-                button.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-              end
-              
-              -- Set item count
-              if itemData.count and itemData.count > 1 then
-                button.count:SetText(itemData.count)
-                button.count:Show()
-              else
-                button.count:Hide()
-              end
-              
-              -- Position button on the button line
-              button:ClearAllPoints()
-              button:SetPoint("LEFT", buttonLine, "LEFT", buttonX, 0)
-              buttonX = buttonX + 18
-              
-              -- Set up secure action for clicking
-              button:SetAttribute("type1", "item")
-              button:SetAttribute("item1", "item:" .. itemData.itemId)
-              button:RegisterForClicks("AnyUp")
             end
+            if texture then
+              button.icon:SetTexture(texture)
+            else
+              -- Fallback: use a placeholder texture
+              button.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+            end
+            
+            -- Hide item count (not needed since tracker shows progress)
+            button.count:Hide()
+            
+            -- Position button inline with quest name, before level text
+            button:ClearAllPoints()
+            button:SetPoint("LEFT", titleLine, "LEFT", buttonX, 0)
+            buttonX = buttonX + 18 -- 16px button + 2px spacing
+            
+            -- Set up secure action for clicking
+            button:SetAttribute("type1", "item")
+            button:SetAttribute("item1", "item:" .. itemData.itemId)
+            button:RegisterForClicks("AnyUp")
           end
         end
         
+        -- Adjust quest line text position to start after buttons
+        -- Rebuild text without focus prefix and position it after buttons
+        titleLine.text:ClearAllPoints()
+        local levelAndTitle = string.format("|cff%s%s%s|r", titleColor, levelText, entry.title)
+        titleLine.text:SetText(levelAndTitle)
+        titleLine.text:SetPoint("LEFT", titleLine, "LEFT", focusPrefixWidth + buttonAreaWidth, 0)
+        
+        -- If there's a focus prefix, create it as a separate text element at the start
+        if focusPrefixWidth > 0 then
+          if not titleLine.focusText then
+            titleLine.focusText = titleLine:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+          end
+          titleLine.focusText:SetText(focusPrefix)
+          titleLine.focusText:SetPoint("LEFT", titleLine, "LEFT", 0, 0)
+          titleLine.focusText:Show()
+        end
+      else
+        -- No items: hide focusText if it exists (use normal text display)
+        if titleLine.focusText then
+          titleLine.focusText:Hide()
+        end
+      end
+      
+      -- Add quest objectives
+      if entry.qlogid then
         local numObjectives = GetNumQuestLeaderBoards(entry.qlogid) or 0
         if numObjectives > 0 then
           for objectiveIndex = 1, numObjectives do
@@ -983,7 +1160,13 @@ function QuestieTracker:Update()
 end
 
 function QuestieTracker:Disable()
+  -- Save position before disabling
   if self.baseFrame then
+    local point, relativeTo, relativePoint, xOfs, yOfs = self.baseFrame:GetPoint(1)
+    if point and relativeTo then
+      local cfg = GetPfConfig()
+      cfg.trackerpos = { point, relativeTo:GetName() or "UIParent", relativePoint, xOfs, yOfs }
+    end
     self.baseFrame:Hide()
   end
   self:ResetDurabilityFrame()
@@ -1013,11 +1196,21 @@ end
 
 function QuestieTracker:Enable()
   Questie.db.profile.trackerEnabled = true
-  self:Initialize()
-  if self.baseFrame then
+  -- Disable default tracker when enabling
+  DisableDefaultTracker()
+  -- If tracker was already initialized, just show it
+  if self.started and self.baseFrame then
     self.baseFrame:Show()
+    self:Update()
+  else
+    -- Otherwise initialize it
+    self.started = false
+    self:Initialize()
+    if self.baseFrame then
+      self.baseFrame:Show()
+    end
+    self:Update()
   end
-  self:Update()
 end
 
 function QuestieTracker:Toggle(force)
