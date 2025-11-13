@@ -44,19 +44,67 @@ if client >= 30300 then
   SetCVar("showQuestTrackingTooltips", 0)
 end
 
--- vanilla+tbc+wotlk: base function to insert quest links to the chat
+local MAX_CHAT_MESSAGE_BYTES = 255
+local strlenutf8 = _G.strlenutf8 or function(val)
+  return string.len(val or "")
+end
+
+local function InsertChatTextWithLimit(editBox, text)
+  if not editBox or not text or text == "" then return false end
+
+  local previousText = editBox:GetText()
+  local previousCursor = editBox:GetCursorPosition()
+
+  editBox:Insert(text)
+
+  local currentText = editBox:GetText()
+  if strlenutf8(currentText) <= MAX_CHAT_MESSAGE_BYTES then
+    return true
+  end
+
+  -- Revert and signal failure so caller can fall back to a shorter link.
+  editBox:SetText(previousText or "")
+  if previousCursor then
+    editBox:SetCursorPosition(previousCursor)
+  end
+
+  return false
+end
+
 pfQuestCompat.InsertQuestLink = function(questid, name)
-  local questid = questid or 0
-  local fallback = name or UNKNOWN
+  questid = questid or 0
+
+  local questLinks
+  if QuestieLoader and QuestieLoader.ImportModule then
+    local ok, module = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieQuestLinks")
+    if ok then
+      questLinks = module
+    end
+  end
+
+  local editBox = ChatFrameEditBox or ChatFrame1EditBox
+  if editBox then editBox:Show() end
+
+  if questLinks and questLinks.IsEnabled and questLinks.GetQuestLink and questLinks:IsEnabled() then
+    local enhancedLink = questLinks:GetQuestLink(questid, name)
+    if enhancedLink and editBox then
+      if InsertChatTextWithLimit(editBox, enhancedLink) then
+        return
+      end
+    end
+  end
+
+  local fallbackName = name or UNKNOWN
   local level = pfDB["quests"]["data"][questid] and pfDB["quests"]["data"][questid]["lvl"] or 0
-  local name = pfDB["quests"]["loc"][questid] and pfDB["quests"]["loc"][questid]["T"] or fallback
+  local questName = pfDB["quests"]["loc"][questid] and pfDB["quests"]["loc"][questid]["T"] or fallbackName
   local hex = pfUI.api.rgbhex(pfQuestCompat.GetDifficultyColor(level))
 
-  ChatFrameEditBox:Show()
-  if pfQuest_config["questlinks"] == "1" then
-    ChatFrameEditBox:Insert(hex .. "|Hquest:" .. questid .. ":" .. level .. "|h[" .. name .. "]|h|r")
-  else
-    ChatFrameEditBox:Insert("[" .. name .. "]")
+  if editBox then
+    if pfQuest_config["questlinks"] == "1" then
+      InsertChatTextWithLimit(editBox, hex .. "|Hquest:" .. questid .. ":" .. level .. "|h[" .. questName .. "]|h|r")
+    else
+      InsertChatTextWithLimit(editBox, "[" .. questName .. "]")
+    end
   end
 end
 

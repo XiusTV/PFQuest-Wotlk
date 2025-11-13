@@ -104,7 +104,37 @@ changes, new modules, and any outstanding follow-up tasks.
    - Coloring only applies to incomplete quests; completed quests remain green, focused quests remain teal
    - Integrated into `QuestieTracker:Update()` function
 
-11. Outstanding / Next Steps
+11. QuestieSounds Integration ✅ COMPLETE
+   - Added `questie/sounds.lua` module with `QuestieSounds` QuestieLoader integration.
+   - New config toggles: `enableQuestSounds`, `questAcceptedSound`, `questCompleteSound` (Announce section).
+   - Hooks quest acceptance/completion inside `quest.lua` to play configured audio cues using `PlaySound`/`PlaySoundFile`.
+   - Defaults leverage Blizzard's `igQuestListOpen` and `igQuestListComplete` sounds; users can supply custom file paths or IDs.
+   - Config dropdowns are pfUI-styled with dedicated preview buttons that play the sound immediately on selection or on demand.
+
+12. QuestieNameplate Integration ✅ COMPLETE
+   - Added `questie/nameplate.lua` module with `QuestieNameplate` QuestieLoader integration.
+   - Shows quest icons on enemy nameplates for quick identification of quest targets (starters, enders, objectives).
+   - Integrates with pfQuest's quest database to identify quest NPCs by parsing unit GUIDs.
+   - New config toggles: `nameplateEnabled`, `nameplateIconScale` (Map & Minimap section).
+   - Uses Wrath-compatible nameplate detection via WorldFrame children scanning with OnUpdate polling.
+   - Icons update automatically when quest log changes; cache clears on quest updates.
+
+13. QuestieQuestLinks Integration ✅ COMPLETE
+   - Added `questie/questlinks.lua` module to enhance quest hyperlinks and tooltips.
+   - New config toggles: `enableQuestLinks`, `questLinkTooltip` (Questing section) to control enhanced output and tooltips.
+   - Enhanced outgoing links preserve Blizzard compatibility while adding level/ID formatting.
+   - Tooltip augmentation now reuses pfQuest database data, showing objectives, requirements, and quest log progress.
+   - Incoming quest links in chat are reformatted locally for easier reading when the feature is enabled.
+
+14. QuestieMenu Integration ✅ COMPLETE
+   - Added `questie/menu.lua` module providing context menu system for townsfolk tracking.
+   - New config toggle: `enableQuestieMenu` (Questing section) to enable/disable the menu.
+   - Integrates with pfQuest's existing tracking system (`pfDatabase.TrackMeta`).
+   - Provides menu for toggling townsfolk icons (Flight Masters, Mailboxes, Trainers, etc.).
+   - Accessible via `/db menu` or `/pfq menu` slash command.
+   - Menu syncs with pfQuest's existing tracking state on initialization.
+
+15. Outstanding / Next Steps
    - ✅ Wire tracker quest item buttons (and future widgets) into `QuestieTracker:RegisterFadeTarget`
      so they participate in idle fade behaviour.
      • Quest item buttons are now created via `TrackerLinePool:GetItemButton()` and automatically
@@ -112,19 +142,17 @@ changes, new modules, and any outstanding follow-up tasks.
        when quest items are detected in bags/equipped.
    - ✅ Level-based quest coloring in tracker
      • Quest titles now color-coded by level relative to player (gray/green/yellow/red)
-   - ✅ QuestieCoordinates integration (Phase 1.1)
-     • Added `questie/coordinates.lua` module adapted from Questie
-     • Displays player coordinates on world map and minimap
-     • Config toggles: `mapCoordinatesEnabled`, `minimapCoordinatesEnabled`, `mapCoordinatePrecision`
-     • Integrated into Map & Minimap config section with onupdate callbacks
-     • Compatible with Wrath 3.3.5 API (uses fallbacks for C_Map/C_Timer if unavailable)
+   - ✅ QuestieNameplate integration (Phase 2.1)
+     • Quest icons now appear on enemy nameplates for quest NPCs; configurable scale and enable/disable toggle.
+  - ℹ️ QuestieCoordinates intentionally deferred
+    • Original Questie coordinates module was removed; no plan to implement map/minimap coordinates at this time.
    - Audit focus UX for additional hotkeys (e.g., minimap clear binding); decide whether to ship
      a keybinding or slash command for quickly clearing focus.
    - Review pfQuest-bronzebeard config extender now that the config pane is two-column; ensure it
      surfaces under the new sidebar and stop relying on `pfQuestConfig<N>` globals.
    - **See `INTEGRATION_ROADMAP.md` for systematic integration plan of remaining Questie features**
 
-12. Testing Notes
+13. Testing Notes
    - Manual verification only. No automated tests configured.
    - Recommended: reload UI after copying to ensure tracker/focus modules capture default
      anchor positions on the new machine.

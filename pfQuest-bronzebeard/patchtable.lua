@@ -2,6 +2,15 @@ local loc = GetLocale()
 local dbs = { "items", "quests", "quests-itemreq", "objects", "units", "zones", "professions", "areatrigger", "refloot" }
 local noloc = { "items", "quests", "objects", "units" }
 
+local function ConfigFlag(newKey, legacyKey)
+  if not pfQuest_config then return false end
+  local value = pfQuest_config[newKey]
+  if value == nil and legacyKey then
+    value = pfQuest_config[legacyKey]
+  end
+  return value == "1"
+end
+
 -- Patch databases to merge Bronzebeard data
 local function patchtable(base, diff)
   for k, v in pairs(diff) do
@@ -493,7 +502,7 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
   if quest["event"] and pfQuest_config["showfestival"] == "0" then return end
 
   -- hide PvP quests
-  if pfQuest_config["bronzebeardHidePvPQuests"] == "1" then
+  if ConfigFlag("hidePvPQuests", "bronzebeardHidePvPQuests") then
     local title = pfDB.quests.loc[id].T
     if title and (
       string.find(title, "Warsong") or
@@ -507,7 +516,7 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
   end
 
   -- hide Commission quests
-  if pfQuest_config["bronzebeardHideCommissionQuests"] == "1" then
+  if ConfigFlag("hideCommissionQuests", "bronzebeardHideCommissionQuests") then
     local title = pfDB.quests.loc[id].T
     if title and string.find(title, "Commission for") then
       return
@@ -515,7 +524,7 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
   end
 
   -- hide chicken quests
-  if pfQuest_config["bronzebeardHideChickenQuests"] == "1" then
+  if ConfigFlag("hideChickenQuests", "bronzebeardHideChickenQuests") then
     local title = pfDB.quests.loc[id].T
     if title and string.find(title, "CLUCK!") then
       return
@@ -523,7 +532,7 @@ function pfDatabase:QuestFilter(id, plevel, pclass, prace)
   end
 
   -- hide Felwood flowers
-  if pfQuest_config["bronzebeardHideFelwoodFlowers"] == "1" then
+  if ConfigFlag("hideFelwoodFlowers", "bronzebeardHideFelwoodFlowers") then
     local title = pfDB.quests.loc[id].T
     if title and (
       title == "Corrupted Windblossom" or
@@ -761,7 +770,7 @@ pfDatabase.SearchQuestID = function(self, id, meta, maps)
 
   if not quests[id] then return maps end
 
-  if pfQuest_config["bronzebeardHideItemDrops"] == "1" then
+  if ConfigFlag("hideItemDrops", "bronzebeardHideItemDrops") then
     return maps
   end
 
@@ -966,7 +975,7 @@ pfDatabase.SearchQuests = function(self, meta, maps)
   local objects = pfDB["objects"]["data"]
   local refloot = pfDB["refloot"]["data"]
 
-  if pfQuest_config["bronzebeardHideItemDrops"] == "1" then
+  if ConfigFlag("hideItemDrops", "bronzebeardHideItemDrops") then
     return maps
   end
 

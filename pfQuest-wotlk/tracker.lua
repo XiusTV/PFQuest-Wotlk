@@ -76,16 +76,35 @@ tracker:SetMovable(true)
 tracker:EnableMouse(true)
 tracker:SetClampedToScreen(true)
 tracker:RegisterEvent("PLAYER_ENTERING_WORLD")
-tracker:SetScript("OnEvent", function()
-  -- update font sizes according to config
-  fontsize = tonumber(pfQuest_config["trackerfontsize"]) or 12
-  entryheight = ceil(fontsize*1.6)
+tracker:RegisterEvent("PLAYER_REGEN_ENABLED")
+tracker:SetScript("OnEvent", function(self, event)
+  if event == "PLAYER_ENTERING_WORLD" then
+    -- update font sizes according to config
+    fontsize = tonumber(pfQuest_config["trackerfontsize"]) or 12
+    entryheight = ceil(fontsize*1.6)
 
-  -- restore tracker state
-  if pfQuest_config["showtracker"] and pfQuest_config["showtracker"] == "0" then
-    this:Hide()
-  else
-    this:Show()
+    -- restore tracker state
+    if pfQuest_config["showtracker"] and pfQuest_config["showtracker"] == "0" then
+      self:Hide()
+    else
+      self:Show()
+    end
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    for _, button in pairs(self.buttons) do
+      if button.pendingUpdate then
+        button.pendingUpdate = nil
+        tracker.ButtonEvent(button, true)
+      end
+    end
+
+    if self.needsResort then
+      self:AlignButtons(false)
+    end
+
+    if self.pendingQuestWatchHide and pfQuestCompat.QuestWatchFrame and pfQuestCompat.QuestWatchFrame:IsShown() then
+      self.pendingQuestWatchHide = nil
+      pcall(function() pfQuestCompat.QuestWatchFrame:Hide() end)
+    end
   end
 end)
 
@@ -125,8 +144,19 @@ tracker:SetScript("OnUpdate", function()
     this.backdrop:SetAlpha(alpha + ((goal - alpha) > 0 and .1 or (goal - alpha) < 0 and -.1 or 0))
   end
 
-  if pfQuestCompat.QuestWatchFrame:IsShown() then
-    pfQuestCompat.QuestWatchFrame:Hide()
+  if pfQuestCompat.QuestWatchFrame then
+    if InCombatLockdown() then
+      if pfQuestCompat.QuestWatchFrame:IsShown() then
+        this.pendingQuestWatchHide = true
+      end
+    else
+      if pfQuestCompat.QuestWatchFrame:IsShown() then
+        this.pendingQuestWatchHide = nil
+        pcall(function() pfQuestCompat.QuestWatchFrame:Hide() end)
+      elseif this.pendingQuestWatchHide then
+        this.pendingQuestWatchHide = nil
+      end
+    end
   end
 end)
 
@@ -301,10 +331,10 @@ function tracker.ButtonClick()
     pfMap:UpdateNodes()
   elseif expand_states[this.title] == 0 then
     expand_states[this.title] = 1
-    tracker.ButtonEvent(this)
+    tracker.ButtonEvent(this, true)
   elseif expand_states[this.title] == 1 then
     expand_states[this.title] = 0
-    tracker.ButtonEvent(this)
+    tracker.ButtonEvent(this, true)
   end
 end
 
@@ -324,12 +354,20 @@ local function trackersort(a,b)
   end
 end
 
-function tracker.ButtonEvent(self)
+function tracker.ButtonEvent(self, force)
   local self   = self or this
   local title  = self.title
   local node   = self.node
   local id     = self.id
   local qid    = self.questid
+
+  if not force and InCombatLockdown() then
+    self.pendingUpdate = true
+    tracker.needsResort = true
+    return
+  end
+
+  self.pendingUpdate = nil
 
   self:SetHeight(0)
 
@@ -463,19 +501,26 @@ function tracker.ButtonEvent(self)
     self.tooltip = pfQuest_Loc["|cff33ffcc<Ctrl-Click>|r Show Map / Toggle Color\n|cff33ffcc<Shift-Click>|r Hide Nodes"]
   end
 
-  -- sort all tracker entries
-  table.sort(tracker.buttons, trackersort)
-
   self:Show()
+  tracker:AlignButtons(InCombatLockdown())
+end
 
-  -- resize window and align buttons
+function tracker:AlignButtons(skipSort)
+  if skipSort then
+    self.needsResort = true
+    return
+  end
+
+  table.sort(self.buttons, trackersort)
+  self.needsResort = nil
+
   local height = panelheight
   local width = 100
 
-  for bid, button in pairs(tracker.buttons) do
+  for bid, button in pairs(self.buttons) do
     button:ClearAllPoints()
-    button:SetPoint("TOPRIGHT", tracker, "TOPRIGHT", 0, -height)
-    button:SetPoint("TOPLEFT", tracker, "TOPLEFT", 0, -height)
+    button:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -height)
+    button:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -height)
     if not button.empty then
       height = height + button:GetHeight()
 
@@ -492,8 +537,8 @@ function tracker.ButtonEvent(self)
   end
 
   width = min(width, 300) + 30
-  tracker:SetHeight(height)
-  tracker:SetWidth(width)
+  self:SetHeight(height)
+  self:SetWidth(width)
 end
 
 function tracker.ButtonAdd(title, node)
@@ -595,7 +640,7 @@ function tracker.ButtonAdd(title, node)
   tracker.buttons[id].questid = questid
 
   -- reload button data
-  tracker.ButtonEvent(tracker.buttons[id])
+  tracker.ButtonEvent(tracker.buttons[id], true)
 end
 
 function tracker.Reset()

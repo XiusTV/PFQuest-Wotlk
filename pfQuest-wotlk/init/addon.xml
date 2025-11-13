@@ -8,6 +8,7 @@
   <Include file="..\questie\auto\core.lua"/>
   <Include file="..\questie\focus.lua"/>
   <Include file="..\questie\announce.lua"/>
+  <Include file="..\questie\sounds.lua"/>
   <Include file="..\questie\tracker\core.lua"/>
   <Include file="..\questie\tracker\init.lua"/>
   <Include file="..\questie\party\sync.lua"/>
@@ -15,6 +16,9 @@
   <Include file="..\questie\tooltips\TooltipHandler.lua"/>
   <Include file="..\questie\tooltips\bridge.lua"/>
   <Include file="..\questie\tooltips\init.lua"/>
+  <Include file="..\questie\questlinks.lua"/>
+  <Include file="..\questie\nameplate.lua"/>
+  <Include file="..\questie\menu.lua"/>
   <Include file="..\overwrites.lua"/>
   <Include file="..\locales.lua"/>
   <Include file="..\config.lua"/>

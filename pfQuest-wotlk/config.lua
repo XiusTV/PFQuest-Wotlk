@@ -7,10 +7,43 @@ local wipe = _G.wipe or function(tbl)
   end
 end
 local math_max = math.max
+local math_min = math.min
+local math_floor = math.floor
 
 pfQuest_history = {}
 pfQuest_colors = {}
 pfQuest_config = {}
+
+local function MigrateLegacyBronzebeardConfig()
+  if not pfQuest_config then return end
+
+  local migrations = {
+    bronzebeardContinentPins = "continentPins",
+    bronzebeardHideChickenQuests = "hideChickenQuests",
+    bronzebeardHideFelwoodFlowers = "hideFelwoodFlowers",
+    bronzebeardHidePvPQuests = "hidePvPQuests",
+    bronzebeardHideCommissionQuests = "hideCommissionQuests",
+    bronzebeardHideItemDrops = "hideItemDrops",
+  }
+
+  for legacyKey, newKey in pairs(migrations) do
+    if pfQuest_config[newKey] == nil and pfQuest_config[legacyKey] ~= nil then
+      pfQuest_config[newKey] = pfQuest_config[legacyKey]
+    end
+  end
+end
+
+MigrateLegacyBronzebeardConfig()
+
+local function GetQuestLinksModule()
+  if QuestieLoader and QuestieLoader.ImportModule then
+    local ok, module = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieQuestLinks")
+    if ok then
+      return module
+    end
+  end
+  return nil
+end
 
 local reset = {
   config = function()
@@ -62,12 +95,34 @@ pfQuest_defconfig = {
     text = nil, default = 1, type = nil
   },
 
-  { text = L["General"],
-    default = nil, type = "header" },
+{ text = L["General"],
+  default = nil, type = "header" },
   { text = L["Enable World Map Menu"],
     default = "1", type = "checkbox", config = "worldmapmenu" },
   { text = L["Enable Minimap Button"],
     default = "1", type = "checkbox", config = "minimapbutton" },
+  { text = L["Enable Questie Menu"] or "Enable Questie Menu",
+    default = "1", type = "checkbox", config = "enableQuestieMenu" },
+  { text = L["Show Database IDs"],
+    default = "0", type = "checkbox", config = "showids" },
+  { text = L["Draw Favorites On Login"],
+    default = "0", type = "checkbox", config = "favonlogin" },
+  { text = L["Minimum Item Drop Chance"],
+    default = "1", type = "text", config = "mindropchance" },
+
+{ text = L["Credits"] or "Credits",
+  default = nil, type = "header" },
+  { text = (L["Original Creator"] or "Original Creator") .. ": |cff33ffccShagu|r",
+    default = "", type = "info", url = "https://github.com/shagu/pfQuest" },
+  { text = (L["Modernization, Integrations, and More"] or "Modernization, Integrations, and More") .. ": |cff33ffccXiusTV|r",
+    default = "", type = "info", url = "https://github.com/XiusTV" },
+  { text = L["XiusTV on Twitch"] or "XiusTV on Twitch",
+    default = "", type = "info", url = "https://www.twitch.tv/xiustv" },
+  { text = (L["Contributors"] or "Contributors") .. ": |cff33ffccBennylavaa|r",
+    default = "", type = "info", url = "https://github.com/Bennylavaa/pfQuest-epoch" },
+
+{ text = L["Questing"],
+  default = nil, type = "header" },
   { text = L["Enable Quest Tracker"],
     default = "1", type = "checkbox", config = "showtracker", onupdate = function()
       if Questie and Questie.LoaderInitialized then
@@ -83,80 +138,56 @@ pfQuest_defconfig = {
         end
       end
     end },
-  { text = L["Enable Quest Auto Accept"],
-    default = "0", type = "checkbox", config = "autoaccept", onupdate = function()
-      if Questie and Questie.db and Questie.db.profile then
-        Questie.db.profile.autoaccept = pfQuest_config["autoaccept"] == "1"
-      end
-    end },
-  { text = L["Enable Quest Auto Turn-In"],
-    default = "0", type = "checkbox", config = "autocomplete", onupdate = function()
-      if Questie and Questie.db and Questie.db.profile then
-        Questie.db.profile.autocomplete = pfQuest_config["autocomplete"] == "1"
-      end
-    end },
-  { text = L["Auto Accept Daily Quests"],
-    default = "0", type = "checkbox", config = "autoacceptdailyonly", onupdate = function()
-      if QuestieAuto and QuestieAuto.settings then
-        QuestieAuto.settings.dailyOnly = pfQuest_config["autoacceptdailyonly"] == "1"
-      end
-    end },
-  { text = L["Auto Quest Exclusions (comma or newline separated)"],
-    default = "", type = "text", config = "autoexclusions", onupdate = function()
-      if QuestieAuto and QuestieAuto.SetCustomExclusions then
-        QuestieAuto:SetCustomExclusions(pfQuest_config["autoexclusions"] or "")
-      end
-    end },
-  { text = L["Enable Quest Log Buttons"],
-    default = "1", type = "checkbox", config = "questlogbuttons" },
-  { text = L["Enable Quest Link Support"],
-    default = "1", type = "checkbox", config = "questlinks" },
-  { text = L["Show Database IDs"],
-    default = "0", type = "checkbox", config = "showids" },
-  { text = L["Draw Favorites On Login"],
-    default = "0", type = "checkbox", config = "favonlogin" },
-  { text = L["Minimum Item Drop Chance"],
-    default = "1", type = "text", config = "mindropchance" },
-  { text = L["Show Tooltips"],
-    default = "1", type = "checkbox", config = "showtooltips" },
-  { text = L["Show Party Progress On Tooltips"] or "Show Party Progress On Tooltips",
-    default = "1", type = "checkbox", config = "tooltippartyprogress", onupdate = function()
-      local partySync = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestiePartySync")
-      if partySync and partySync.RefreshFromConfig then
-        partySync:RefreshFromConfig()
-      end
-    end },
-  { text = L["Disable Party Progress Yells"] or "Disable Party Progress Yells",
-    default = "0", type = "checkbox", config = "disablepartyells", onupdate = function()
-      local partySync = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestiePartySync")
-      if partySync and partySync.RefreshFromConfig then
-        partySync:RefreshFromConfig()
-      end
-    end },
-  { text = L["Show Help On Tooltips"],
-    default = "1", type = "checkbox", config = "tooltiphelp" },
-  { text = L["Show Level On Quest Tracker"],
-    default = "1", type = "checkbox", config = "trackerlevel" },
-  { text = L["Show Level On Quest Log"],
-    default = "0", type = "checkbox", config = "questloglevel" },
-
-  { text = L["Announce"],
-    default = nil, type = "header" },
-  { text = L["Announce Quest Accepted"] or "Announce Quest Accepted",
-    default = "0", type = "checkbox", config = "announceQuestAccepted" },
-  { text = L["Announce Finished Quest Objectives"] or "Announce Finished Quest Objectives",
-    default = "1", type = "checkbox", config = "announceFinishedObjectives" },
-  { text = L["Announce Remaining Quest Objectives"] or "Announce Remaining Quest Objectives",
-    default = "0", type = "checkbox", config = "announceRemainingObjectives" },
-
-  { text = L["Questing"],
-    default = nil, type = "header" },
   { text = L["Quest Tracker Visibility"],
     default = "0", type = "text", config = "trackeralpha" },
   { text = L["Quest Tracker Font Size"],
     default = "12", type = "text", config = "trackerfontsize", },
   { text = L["Quest Tracker Unfold Objectives"],
     default = "0", type = "checkbox", config = "trackerexpand" },
+  { text = L["Fade Tracker When Idle"] or "Fade Tracker When Idle",
+    default = "0", type = "checkbox", config = "trackerfade", onupdate = function()
+      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
+      if tracker and tracker.SyncProfileFromConfig then
+        tracker:SyncProfileFromConfig()
+      end
+      if tracker and tracker.RefreshFade then
+        tracker:RefreshFade()
+      end
+      if pfQuestConfig and pfQuestConfig.SetSliderEnabled then
+        pfQuestConfig:SetSliderEnabled("trackerfadealpha", pfQuest_config["trackerfade"] == "1")
+      end
+    end },
+  { text = L["Tracker Fade Opacity"] or "Tracker Fade Opacity",
+    default = "0.12", type = "slider", config = "trackerfadealpha", min = 0.0, max = 0.35, step = 0.01,
+    format = "%.2f", displayFormatter = function(value)
+      return string.format("%d%%", math_floor((value or 0) * 100 + 0.5))
+    end,
+    onupdate = function()
+      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
+      if tracker and tracker.RefreshFade then
+        tracker:RefreshFade()
+      end
+    end },
+  { text = L["Stick Durability Frame"] or "Stick Durability Frame",
+    default = "0", type = "checkbox", config = "stickydurability", onupdate = function()
+      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
+      if tracker and tracker.SyncProfileFromConfig then
+        tracker:SyncProfileFromConfig()
+      end
+      if tracker and tracker.UpdateAnchoredFrames then
+        tracker:UpdateAnchoredFrames()
+      end
+    end },
+  { text = L["Stick VoiceOver Frame"] or "Stick VoiceOver Frame",
+    default = "0", type = "checkbox", config = "stickyvoiceover", onupdate = function()
+      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
+      if tracker and tracker.SyncProfileFromConfig then
+        tracker:SyncProfileFromConfig()
+      end
+      if tracker and tracker.UpdateAnchoredFrames then
+        tracker:UpdateAnchoredFrames()
+      end
+    end },
   { text = L["Enable Quest Focus"] or "Enable Quest Focus",
     default = "0", type = "checkbox", config = "focusenable", onupdate = function()
       local focus = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieFocus")
@@ -203,36 +234,131 @@ pfQuest_defconfig = {
         focus:RefreshFromConfig()
       end
     end },
-  { text = L["Stick Durability Frame"] or "Stick Durability Frame",
-    default = "0", type = "checkbox", config = "stickydurability", onupdate = function()
-      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
-      if tracker and tracker.SyncProfileFromConfig then
-        tracker:SyncProfileFromConfig()
-      end
-      if tracker and tracker.UpdateAnchoredFrames then
-        tracker:UpdateAnchoredFrames()
+  { text = L["Enable Quest Auto Accept"],
+    default = "0", type = "checkbox", config = "autoaccept", onupdate = function()
+      if Questie and Questie.db and Questie.db.profile then
+        Questie.db.profile.autoaccept = pfQuest_config["autoaccept"] == "1"
       end
     end },
-  { text = L["Stick VoiceOver Frame"] or "Stick VoiceOver Frame",
-    default = "0", type = "checkbox", config = "stickyvoiceover", onupdate = function()
-      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
-      if tracker and tracker.SyncProfileFromConfig then
-        tracker:SyncProfileFromConfig()
-      end
-      if tracker and tracker.UpdateAnchoredFrames then
-        tracker:UpdateAnchoredFrames()
+  { text = L["Enable Quest Auto Turn-In"],
+    default = "0", type = "checkbox", config = "autocomplete", onupdate = function()
+      if Questie and Questie.db and Questie.db.profile then
+        Questie.db.profile.autocomplete = pfQuest_config["autocomplete"] == "1"
       end
     end },
-  { text = L["Fade Tracker When Idle"] or "Fade Tracker When Idle",
-    default = "0", type = "checkbox", config = "trackerfade", onupdate = function()
-      local tracker = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieTracker")
-      if tracker and tracker.SyncProfileFromConfig then
-        tracker:SyncProfileFromConfig()
-      end
-      if tracker and tracker.RefreshFade then
-        tracker:RefreshFade()
+  { text = L["Auto Accept Daily Quests"],
+    default = "0", type = "checkbox", config = "autoacceptdailyonly", onupdate = function()
+      if QuestieAuto and QuestieAuto.settings then
+        QuestieAuto.settings.dailyOnly = pfQuest_config["autoacceptdailyonly"] == "1"
       end
     end },
+  { text = L["Auto Quest Exclusions (comma or newline separated)"],
+    default = "", type = "text", config = "autoexclusions", onupdate = function()
+      if QuestieAuto and QuestieAuto.SetCustomExclusions then
+        QuestieAuto:SetCustomExclusions(pfQuest_config["autoexclusions"] or "")
+      end
+    end },
+  { text = L["Enable Quest Log Buttons"],
+    default = "1", type = "checkbox", config = "questlogbuttons" },
+  { text = L["Enable Quest Link Support"],
+    default = "1", type = "checkbox", config = "questlinks" },
+  { text = L["Enable Enhanced Quest Links"] or "Enable Enhanced Quest Links",
+    default = "0", type = "checkbox", config = "enableQuestLinks", onupdate = function()
+      local questLinks = GetQuestLinksModule()
+      if questLinks and questLinks.RefreshFromConfig then
+        questLinks:RefreshFromConfig()
+      end
+    end },
+  { text = L["Show Enhanced Link Tooltips"] or "Show Enhanced Link Tooltips",
+    default = "1", type = "checkbox", config = "questLinkTooltip", onupdate = function()
+      local questLinks = GetQuestLinksModule()
+      if questLinks and questLinks.RefreshFromConfig then
+        questLinks:RefreshFromConfig()
+      end
+    end },
+  { text = L["Show Quest Giver Paths"] or "Show Quest Giver Paths",
+    default = "1", type = "checkbox", config = "showgiverpaths" },
+  { text = L["Show Tooltips"],
+    default = "1", type = "checkbox", config = "showtooltips" },
+  { text = L["Show Party Progress On Tooltips"] or "Show Party Progress On Tooltips",
+    default = "1", type = "checkbox", config = "tooltippartyprogress", onupdate = function()
+      local partySync = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestiePartySync")
+      if partySync and partySync.RefreshFromConfig then
+        partySync:RefreshFromConfig()
+      end
+    end },
+  { text = L["Show Help On Tooltips"],
+    default = "1", type = "checkbox", config = "tooltiphelp" },
+  { text = L["Show Level On Quest Tracker"],
+    default = "1", type = "checkbox", config = "trackerlevel" },
+  { text = L["Show Level On Quest Log"],
+    default = "0", type = "checkbox", config = "questloglevel" },
+  { text = L["Enable Quest Icons On Nameplates"] or "Enable Quest Icons On Nameplates",
+    default = "0", type = "checkbox", config = "nameplateEnabled", onupdate = function()
+      local nameplate = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieNameplate")
+      if nameplate and nameplate.RefreshFromConfig then
+        nameplate:RefreshFromConfig()
+      end
+    end },
+  { text = L["Nameplate Icon Scale"] or "Nameplate Icon Scale",
+    default = "1.0", type = "text", config = "nameplateIconScale", onupdate = function()
+      local nameplate = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieNameplate")
+      if nameplate and nameplate.RefreshFromConfig then
+        nameplate:RefreshFromConfig()
+      end
+    end },
+
+{ text = L["Announce"],
+  default = nil, type = "header" },
+  { text = L["Announce Quest Accepted"] or "Announce Quest Accepted",
+    default = "0", type = "checkbox", config = "announceQuestAccepted" },
+  { text = L["Announce Finished Quest Objectives"] or "Announce Finished Quest Objectives",
+    default = "1", type = "checkbox", config = "announceFinishedObjectives" },
+  { text = L["Announce Remaining Quest Objectives"] or "Announce Remaining Quest Objectives",
+    default = "0", type = "checkbox", config = "announceRemainingObjectives" },
+  { text = L["Enable Quest Sounds"] or "Enable Quest Sounds",
+    default = "0", type = "checkbox", config = "enableQuestSounds", onupdate = function()
+      local sounds = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+      if sounds and sounds.RefreshFromConfig then
+        sounds:RefreshFromConfig()
+      end
+    end },
+  { text = L["Quest Accepted Sound"] or "Quest Accepted Sound",
+    default = "igQuestListOpen", type = "select", config = "questAcceptedSound",
+    values = {
+      { value = "igQuestListOpen", label = "Quest List Open" },
+      { value = "igQuestLogAbandonQuest", label = "Abandon Quest" },
+      { value = "igMainMenuOptionCheckBoxOn", label = "Checkbox On" },
+      { value = "igMainMenuOption", label = "Main Menu Option" },
+      { value = "TellMessage", label = "Tell Message" },
+      { value = "MapPing", label = "Map Ping" },
+      { value = "QUESTADDED", label = "Quest Added" },
+    },
+    onupdate = function()
+      local sounds = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+      if sounds and sounds.RefreshFromConfig then
+        sounds:RefreshFromConfig()
+      end
+    end },
+  { text = L["Quest Completed Sound"] or "Quest Completed Sound",
+    default = "igQuestListComplete", type = "select", config = "questCompleteSound",
+    values = {
+      { value = "igQuestListComplete", label = "Quest List Complete" },
+      { value = "QUESTCOMPLETE", label = "Quest Complete" },
+      { value = "LEVELUP", label = "Level Up" },
+      { value = "MapPing", label = "Map Ping" },
+      { value = "TellMessage", label = "Tell Message" },
+      { value = "igMainMenuOptionCheckBoxOn", label = "Checkbox On" },
+    },
+    onupdate = function()
+      local sounds = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+      if sounds and sounds.RefreshFromConfig then
+        sounds:RefreshFromConfig()
+      end
+    end },
+
+{ text = L["Map & Minimap"],
+    default = nil, type = "header" },
   { text = L["Quest Objective Spawn Points (World Map)"],
     default = "1", type = "checkbox", config = "showspawn" },
   { text = L["Quest Objective Spawn Points (Mini Map)"],
@@ -261,9 +387,6 @@ pfQuest_defconfig = {
     default = "1", type = "checkbox", config = "hideFelwoodFlowers" },
   { text = L["Hide Item Drop Quest Starters"] or "Hide Item Drop Quest Starters",
     default = "0", type = "checkbox", config = "hideItemDrops" },
-
-  { text = L["Map & Minimap"],
-    default = nil, type = "header" },
   { text = L["Enable Minimap Nodes"],
     default = "1", type = "checkbox", config = "minimapnodes" },
   { text = L["Use Icons For Tracking Nodes"],
@@ -284,9 +407,6 @@ pfQuest_defconfig = {
     default = "0.3", type = "text", config = "nodefade" },
   { text = L["Highlight Nodes On Mouseover"],
     default = "1", type = "checkbox", config = "mouseover" },
-
-  { text = L["Continent Map"] or "Continent Map",
-    default = nil, type = "header" },
   { text = L["Display Continent Pins"] or "Display Continent Pins",
     default = "1", type = "checkbox", config = "continentPins" },
   { text = L["Require Ctrl+Click for Pin Interaction"] or "Require Ctrl+Click for Pin Interaction",
@@ -439,6 +559,10 @@ pfQuestConfig.save.text:SetFont(pfUI.font_default, pfUI_config.global.font_size,
 pfQuestConfig.save.text:SetText(L["Save & Close"])
 pfUI.api.SkinButton(pfQuestConfig.save)
 
+pfQuestConfig.versionLabel = pfQuestConfig:CreateFontString(nil, "LOW", "GameFontHighlight")
+pfQuestConfig.versionLabel:SetPoint("BOTTOM", pfQuestConfig, "BOTTOM", 0, 24)
+pfQuestConfig.versionLabel:SetText("|cff33ffccVersion 0.9 (Beta)|r")
+
 function pfQuestConfig:LoadConfig()
   if not pfQuest_config then pfQuest_config = {} end
   for id, data in pairs(pfQuest_defconfig) do
@@ -473,6 +597,57 @@ function pfQuestConfig:MigrateHistory()
 end
 
 local configframes = {}
+
+local function StyleDropdownControl(dropdown, dropdownName)
+  if not dropdown then return end
+  dropdownName = dropdownName or (dropdown.GetName and dropdown:GetName())
+  if not dropdownName then return end
+
+  dropdown:SetHeight(22)
+
+  local left = _G[dropdownName .. "Left"]
+  local middle = _G[dropdownName .. "Middle"]
+  local right = _G[dropdownName .. "Right"]
+  if left then left:Hide() end
+  if middle then middle:Hide() end
+  if right then right:Hide() end
+
+  if pfUI and pfUI.api and pfUI.api.CreateBackdrop then
+    pfUI.api.CreateBackdrop(dropdown, nil, true)
+    if dropdown.backdrop then
+      dropdown.backdrop:SetPoint("TOPLEFT", dropdown, "TOPLEFT", -3, 3)
+      dropdown.backdrop:SetPoint("BOTTOMRIGHT", dropdown, "BOTTOMRIGHT", 3, -3)
+    end
+  end
+
+  local text = _G[dropdownName .. "Text"]
+  if text then
+    text:ClearAllPoints()
+    text:SetPoint("LEFT", dropdown, "LEFT", 8, 0)
+    text:SetPoint("RIGHT", dropdown, "RIGHT", -20, 0)
+    text:SetJustifyH("LEFT")
+    text:SetFont(pfUI.font_default, pfUI_config.global.font_size, "OUTLINE")
+  end
+
+  local button = _G[dropdownName .. "Button"]
+  if button then
+    button:ClearAllPoints()
+    button:SetPoint("RIGHT", dropdown, "RIGHT", -2, 0)
+    button:SetSize(16, 16)
+    button:SetNormalTexture(nil)
+    button:SetPushedTexture(nil)
+    button:SetHighlightTexture(nil)
+
+    if not button.icon then
+      button.icon = button:CreateTexture(nil, "ARTWORK")
+      button.icon:SetTexture("Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-Up")
+      button.icon:SetSize(12, 12)
+      button.icon:SetPoint("CENTER", button, "CENTER", 0, 0)
+    end
+    button.icon:SetVertexColor(.2, 1, .8, 1)
+  end
+end
+
 function pfQuestConfig:CreateConfigEntries(config)
   if self.categories then
     for _, cat in pairs(self.categories) do
@@ -496,6 +671,7 @@ function pfQuestConfig:CreateConfigEntries(config)
   self.categories = {}
   self.categoryOrder = {}
   self.categoryButtons = {}
+  self.sliderRegistry = {}
 
   local sidebarWidth = 190
 
@@ -664,6 +840,298 @@ function pfQuestConfig:CreateConfigEntries(config)
           end
         end)
         pfUI.api.CreateBackdrop(frame.input, nil, true)
+      elseif entryData.type == "slider" then
+        local sliderName = "pfQuestConfigSlider" .. (entryData.config or tostring(entryData))
+        if _G[sliderName] then
+          local index = 1
+          while _G[sliderName .. index] do
+            index = index + 1
+          end
+          sliderName = sliderName .. index
+        end
+
+        frame.input = CreateFrame("Slider", sliderName, frame, "OptionsSliderTemplate")
+        local slider = frame.input
+        slider:SetWidth(150)
+        slider:SetPoint("RIGHT", frame, "RIGHT", -24, 0)
+        slider:SetMinMaxValues(entryData.min or 0, entryData.max or 1)
+        slider:SetValueStep(entryData.step or 0.05)
+        if slider.SetObeyStepOnDrag then
+          slider:SetObeyStepOnDrag(true)
+        end
+        slider.config = entryData.config
+        slider.format = entryData.format or "%.2f"
+        slider.displayFormatter = entryData.displayFormatter
+        slider.minValue = entryData.min or 0
+        slider.maxValue = entryData.max or 1
+        slider.step = entryData.step or 0.05
+
+        local lowText = _G[sliderName .. "Low"]
+        if lowText then
+          local lowDisplay = slider.displayFormatter and slider.displayFormatter(slider.minValue) or string.format(slider.format, slider.minValue)
+          lowText:SetText(lowDisplay)
+        end
+        local highText = _G[sliderName .. "High"]
+        if highText then
+          local highDisplay = slider.displayFormatter and slider.displayFormatter(slider.maxValue) or string.format(slider.format, slider.maxValue)
+          highText:SetText(highDisplay)
+        end
+        local centerText = _G[sliderName .. "Text"]
+        if centerText then
+          centerText:SetText("")
+        end
+
+        slider.valueText = frame:CreateFontString(nil, "OVERLAY", "GameFontWhite")
+        slider.valueText:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        slider.valueText:SetFont(pfUI.font_default, pfUI_config.global.font_size - 1, "OUTLINE")
+        slider.valueText:SetJustifyH("LEFT")
+
+        local currentValue = tonumber(pfQuest_config[entryData.config])
+        if not currentValue then
+          currentValue = tonumber(entryData.default)
+        end
+        if not currentValue then
+          currentValue = slider.minValue
+        end
+        currentValue = math_max(slider.minValue, math_min(slider.maxValue, currentValue))
+        slider._updating = true
+        slider:SetValue(currentValue)
+        slider._updating = nil
+
+        local displayText
+        if slider.displayFormatter then
+          displayText = slider.displayFormatter(currentValue)
+        else
+          displayText = string.format(slider.format, currentValue)
+        end
+        slider.valueText:SetText(displayText)
+        pfQuest_config[entryData.config] = string.format(slider.format, currentValue)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+          if self._updating then return end
+          local minValue = self.minValue or 0
+          local maxValue = self.maxValue or 1
+          local step = self.step or 0.05
+          local precision = step > 0 and (1 / step) or 100
+          value = math_max(minValue, math_min(maxValue, math_floor(value * precision + 0.5) / precision))
+
+          pfQuest_config[self.config] = string.format(self.format or "%.2f", value)
+
+          if self.valueText then
+            if self.displayFormatter then
+              self.valueText:SetText(self.displayFormatter(value))
+            else
+              self.valueText:SetText(string.format(self.format or "%.2f", value))
+            end
+          end
+
+          if entryData.onupdate then
+            entryData.onupdate(value)
+          end
+        end)
+
+        if pfQuestConfig and pfQuestConfig.sliderRegistry then
+          pfQuestConfig.sliderRegistry[entryData.config] = slider
+        end
+      elseif entryData.type == "info" then
+        frame.caption:ClearAllPoints()
+        frame.caption:SetPoint("LEFT", frame, "LEFT", 0, 0)
+        frame.caption:SetPoint("RIGHT", frame, "RIGHT", (entryData.url and -90 or 0), 0)
+        frame.caption:SetText(entryData.text or "")
+        frame.caption:SetJustifyH("LEFT")
+        frame.caption:SetTextColor(0.8, 0.8, 0.8, 1)
+
+        if entryData.url then
+          frame.linkButton = CreateFrame("Button", nil, frame)
+          frame.linkButton:SetSize(80, 20)
+          frame.linkButton:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
+          frame.linkButton:SetText(L["Open Link"] or "Open Link")
+          if pfUI and pfUI.api and pfUI.api.SkinButton then
+            pfUI.api.SkinButton(frame.linkButton)
+          end
+          frame.linkButton:SetScript("OnClick", function()
+            local link = entryData.url
+            if not link then return end
+            if ChatFrame_OpenURL then
+              ChatFrame_OpenURL(link)
+            else
+              DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccpfQuest|r: " .. link)
+            end
+          end)
+        end
+      elseif entryData.type == "select" and entryData.values then
+        local dropdownName = "pfQuestConfigDropdown" .. (entryData.config or tostring(entryData))
+        if _G[dropdownName] then
+          local index = 1
+          while _G[dropdownName .. index] do
+            index = index + 1
+          end
+          dropdownName = dropdownName .. index
+        end
+
+        frame.input = CreateFrame("Frame", dropdownName, frame, "UIDropDownMenuTemplate")
+        frame.input:SetWidth(150)
+        frame.input:SetHeight(22)
+        frame.input:SetPoint("RIGHT", frame, "RIGHT", -26, 0)
+        frame.input.config = entryData.config
+        frame.input.values = entryData.values
+        frame.input.dropdownName = dropdownName
+
+        frame.previewButton = CreateFrame("Button", nil, frame)
+        frame.previewButton:SetPoint("LEFT", frame.input, "RIGHT", 4, 0)
+        frame.previewButton:SetSize(20, 20)
+        frame.previewButton.config = entryData.config
+        frame.previewButton.defaultValue = entryData.default
+        frame.previewButton:SetNormalTexture(nil)
+        frame.previewButton:SetHighlightTexture(nil)
+        frame.previewButton:SetPushedTexture(nil)
+        frame.previewButton:SetDisabledTexture(nil)
+        frame.previewButton.icon = frame.previewButton:CreateTexture(nil, "ARTWORK")
+        frame.previewButton.icon:SetTexture("Interface\\Buttons\\UI-VoiceChat-Speaker")
+        frame.previewButton.icon:SetPoint("CENTER", frame.previewButton, "CENTER", 0, 0)
+        frame.previewButton.icon:SetSize(16, 16)
+        frame.previewButton.icon:SetVertexColor(.2, 1, .8, 1)
+        if pfUI and pfUI.api and pfUI.api.CreateBackdrop then
+          pfUI.api.CreateBackdrop(frame.previewButton, nil, true)
+        end
+
+        frame.previewButton:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:SetText("Preview Sound", 0.2, 1, 0.8)
+          GameTooltip:AddLine("Click to play the currently selected sound.", 1, 1, 1, true)
+          GameTooltip:Show()
+        end)
+        frame.previewButton:SetScript("OnLeave", function()
+          GameTooltip:Hide()
+        end)
+        frame.previewButton:SetScript("OnClick", function(self)
+          local selection = pfQuest_config[self.config] or self.defaultValue
+          if not selection or selection == "" then
+            selection = self.defaultValue
+          end
+          
+          local sounds = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+          if sounds and sounds.PreviewSound then
+            sounds:PreviewSound(selection, self.defaultValue)
+          else
+            -- Fallback: try to play directly if module not available
+            if selection then
+              local success, err = pcall(function()
+                PlaySound(selection)
+              end)
+              if not success and self.defaultValue then
+                pcall(function()
+                  PlaySound(self.defaultValue)
+                end)
+              end
+            end
+          end
+        end)
+
+        frame.input.getDisplayText = function(value)
+          if not value or value == "" then return "" end
+          if type(entryData.values[1]) == "table" then
+            for _, option in ipairs(entryData.values) do
+              if option.value == value then
+                return option.label or option.text or tostring(option.value)
+              end
+            end
+          else
+            return entryData.values[value] or tostring(value)
+          end
+          return tostring(value)
+        end
+
+        frame.input.iterateOptions = function(callback)
+          if type(entryData.values[1]) == "table" then
+            for _, option in ipairs(entryData.values) do
+              callback(option.value, option.label or option.text or tostring(option.value))
+            end
+          else
+            local keys = {}
+            for value in pairs(entryData.values) do
+              table.insert(keys, value)
+            end
+            table.sort(keys)
+            for _, value in ipairs(keys) do
+              callback(value, entryData.values[value])
+            end
+          end
+        end
+
+        local currentValue = pfQuest_config[entryData.config] or entryData.default or ""
+        if (not currentValue or currentValue == "") and entryData.default and entryData.default ~= "" then
+          pfQuest_config[entryData.config] = entryData.default
+          currentValue = entryData.default
+        end
+        local displayText = frame.input.getDisplayText(currentValue)
+        UIDropDownMenu_SetText(frame.input, displayText)
+        UIDropDownMenu_SetSelectedValue(frame.input, currentValue)
+        StyleDropdownControl(frame.input, dropdownName)
+
+        UIDropDownMenu_Initialize(frame.input, function(_, level)
+          if not level then return end
+          local info = UIDropDownMenu_CreateInfo()
+          frame.input.iterateOptions(function(value, text)
+            info.text = text
+            info.value = value
+            info.func = function()
+              pfQuest_config[frame.input.config] = value
+              UIDropDownMenu_SetSelectedValue(frame.input, value)
+              UIDropDownMenu_SetText(frame.input, text)
+              if entryData.onupdate then
+                entryData.onupdate()
+              end
+              local sounds = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+              if sounds then
+                if sounds.RefreshFromConfig then
+                  sounds:RefreshFromConfig()
+                end
+                if sounds.PreviewSound then
+                  sounds:PreviewSound(value, entryData.default)
+                else
+                  -- Fallback: try to play directly
+                  if value then
+                    pcall(function() PlaySound(value) end)
+                  end
+                end
+              else
+                -- Fallback: try to play directly if module not available
+                if value then
+                  pcall(function() PlaySound(value) end)
+                end
+              end
+              StyleDropdownControl(frame.input, dropdownName)
+            end
+            info.checked = (pfQuest_config[frame.input.config] == value) and true or false
+            UIDropDownMenu_AddButton(info, level)
+          end)
+        end)
+
+        UIDropDownMenu_SetWidth(frame.input, 130)
+        StyleDropdownControl(frame.input, dropdownName)
+
+        local dropdownButton = _G[dropdownName .. "Button"]
+        if dropdownButton then
+          dropdownButton:SetScript("OnClick", function(self)
+            PlaySound("igMainMenuOptionCheckBoxOn")
+            ToggleDropDownMenu(1, nil, frame.input, self, 0, 0)
+          end)
+        end
+
+        frame.input:SetScript("OnMouseDown", function(_, button)
+          if button == "LeftButton" then
+            PlaySound("igMainMenuOptionCheckBoxOn")
+            ToggleDropDownMenu(1, nil, frame.input, frame.input, 0, 0)
+          end
+        end)
+        frame.input:SetScript("OnEnter", function()
+          StyleDropdownControl(frame.input, dropdownName)
+        end)
+        frame.input:SetScript("OnLeave", function()
+          StyleDropdownControl(frame.input, dropdownName)
+        end)
+
       elseif entryData.type == "button" and entryData.func then
         frame.input = CreateFrame("Button", nil, frame)
         frame.input:SetWidth(120)
@@ -699,6 +1167,10 @@ function pfQuestConfig:CreateConfigEntries(config)
   if self.categoryOrder[1] then
     self:ShowCategory(self.categoryOrder[1])
   end
+
+  if self.SetSliderEnabled then
+    self:SetSliderEnabled("trackerfadealpha", pfQuest_config["trackerfade"] == "1")
+  end
 end
 
 function pfQuestConfig:UpdateConfigEntries()
@@ -708,7 +1180,76 @@ function pfQuestConfig:UpdateConfigEntries()
         configframes[data].input:SetChecked((pfQuest_config[data.config] == "1" and true or nil))
       elseif data.type == "text" then
         configframes[data].input:SetText(pfQuest_config[data.config])
+      elseif data.type == "slider" then
+        local slider = configframes[data].input
+        if slider then
+          local value = tonumber(pfQuest_config[data.config]) or tonumber(data.default) or slider.minValue or 0
+          value = math_max(slider.minValue or value, math_min(slider.maxValue or value, value))
+          slider._updating = true
+          slider:SetValue(value)
+          slider._updating = nil
+          if slider.valueText then
+            if slider.displayFormatter then
+              slider.valueText:SetText(slider.displayFormatter(value))
+            else
+              slider.valueText:SetText(string.format(slider.format or "%.2f", value))
+            end
+          end
+        end
+      elseif data.type == "select" and data.values then
+        local currentValue = pfQuest_config[data.config] or data.default or ""
+        if currentValue == "" and data.default and data.default ~= "" then
+          pfQuest_config[data.config] = data.default
+          currentValue = data.default
+        end
+        local displayText
+        if configframes[data].input and configframes[data].input.getDisplayText then
+          displayText = configframes[data].input.getDisplayText(currentValue)
+        elseif type(data.values[1]) == "table" then
+          for _, option in ipairs(data.values) do
+            if option.value == currentValue then
+              displayText = option.label or option.text or tostring(option.value)
+              break
+            end
+          end
+        else
+          displayText = data.values[currentValue]
+        end
+        displayText = displayText or tostring(currentValue or "")
+        if configframes[data].input then
+          UIDropDownMenu_SetSelectedValue(configframes[data].input, currentValue)
+          UIDropDownMenu_SetText(configframes[data].input, displayText)
+          StyleDropdownControl(configframes[data].input, configframes[data].input.dropdownName)
+        end
+        if configframes[data].previewButton then
+          configframes[data].previewButton.defaultValue = data.default
+        end
       end
+    end
+  end
+
+  if self.SetSliderEnabled then
+    self:SetSliderEnabled("trackerfadealpha", pfQuest_config["trackerfade"] == "1")
+  end
+end
+
+function pfQuestConfig:SetSliderEnabled(configKey, enabled)
+  if not self.sliderRegistry then return end
+  local slider = self.sliderRegistry[configKey]
+  if not slider then return end
+
+  enabled = not not enabled
+  if enabled then
+    slider:Enable()
+    slider:SetAlpha(1)
+    if slider.valueText then
+      slider.valueText:SetTextColor(1, 1, 1)
+    end
+  else
+    slider:Disable()
+    slider:SetAlpha(0.5)
+    if slider.valueText then
+      slider.valueText:SetTextColor(0.6, 0.6, 0.6)
     end
   end
 end
@@ -807,6 +1348,10 @@ do -- welcome/init popup dialog
   end)
 
   pfUI.api.CreateBackdrop(pfQuestInit, nil, true, 0.85)
+
+  pfQuestInit.versionText = pfQuestInit:CreateFontString(nil, "LOW", "GameFontHighlight")
+  pfQuestInit.versionText:SetPoint("CENTER", pfQuestInit, "CENTER", 0, -10)
+  pfQuestInit.versionText:SetText("|cff33ffccVersion 0.9 (Beta)|r")
 
   -- welcome title
   pfQuestInit.title = pfQuestInit:CreateFontString("Status", "LOW", "GameFontWhite")

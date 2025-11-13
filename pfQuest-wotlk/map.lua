@@ -175,6 +175,90 @@ local function NodeAnimate(self, zoom, alpha, fps)
   return change
 end
 
+local pathTexturePool = {}
+local pathFrameParent
+
+local function EnsurePathParent()
+  if not pathFrameParent then
+    pathFrameParent = WorldMapButton.questiePaths
+    if not pathFrameParent then
+      pathFrameParent = CreateFrame("Frame", "pfQuestQuestiePaths", WorldMapButton)
+      pathFrameParent:SetAllPoints()
+      WorldMapButton.questiePaths = pathFrameParent
+    end
+  end
+  return pathFrameParent
+end
+
+local function AcquirePathDot()
+  local parent = EnsurePathParent()
+  local dot = table.remove(pathTexturePool)
+  if not dot then
+    dot = parent:CreateTexture(nil, "OVERLAY")
+    dot:SetTexture("Interface\\Buttons\\WHITE8x8")
+  end
+  dot:SetWidth(6)
+  dot:SetHeight(6)
+  return dot
+end
+
+local function ReleasePathDots(frame)
+  if not frame or not frame.pathDots then return end
+  for _, dot in ipairs(frame.pathDots) do
+    dot:Hide()
+    table.insert(pathTexturePool, dot)
+  end
+  wipe(frame.pathDots)
+end
+
+local function ClearNodePath(frame)
+  ReleasePathDots(frame)
+end
+
+local function DrawNodePath(frame, mapID)
+  ReleasePathDots(frame)
+  if not frame or not frame.pathData or not mapID then return end
+  if pfQuest_config and pfQuest_config["showgiverpaths"] == "0" then return end
+
+  local zoneSegments = frame.pathData[mapID]
+  if not zoneSegments then return end
+
+  local parent = EnsurePathParent()
+  local width = WorldMapButton:GetWidth()
+  local height = WorldMapButton:GetHeight()
+  local color = frame.pathColor or {1, 0.82, 0, 0.85}
+  frame.pathDots = frame.pathDots or {}
+
+  for _, segment in ipairs(zoneSegments) do
+    if type(segment) == "table" and #segment > 1 then
+      local previous = segment[1]
+      for idx = 2, #segment do
+        local current = segment[idx]
+        local prevX, prevY = previous[1], previous[2]
+        local currX, currY = current[1], current[2]
+        if prevX and prevY and currX and currY then
+          local dx = currX - prevX
+          local dy = currY - prevY
+          local distance = math.sqrt(dx * dx + dy * dy)
+          local steps = math.max(1, math.ceil(distance * 1.5))
+          for step = 1, steps - 1 do
+            local ratio = step / steps
+            local px = prevX + dx * ratio
+            local py = prevY + dy * ratio
+            local dot = AcquirePathDot()
+            dot:SetVertexColor(color[1], color[2], color[3], color[4] or 0.9)
+            dot:ClearAllPoints()
+            dot:SetPoint("CENTER", parent, "TOPLEFT", px / 100 * width, -py / 100 * height)
+            dot:Show()
+            table.insert(frame.pathDots, dot)
+          end
+        end
+        previous = current
+      end
+    end
+  end
+end
+
 local function EnsureFocusGlow(frame)
   if not frame or frame.focusGlow then
     return
@@ -215,6 +299,13 @@ pfMap.drawlayer = Minimap
 pfMap.unifiedcache = unifiedcache
 
 pfMap.EnsureFocusGlow = EnsureFocusGlow
+pfMap.ClearNodePath = function(self, frame)
+  ClearNodePath(frame)
+end
+
+pfMap.DrawNodePath = function(self, frame, mapID)
+  DrawNodePath(frame, mapID)
+end
 
 pfMap.minimap_indoor = minimap_indoor
 pfMap.minimap_zoom = minimap_zoom
@@ -784,6 +875,8 @@ function pfMap:UpdateNode(frame, node, color, obj, distance)
 
   -- reset layer
   frame.layer = 0
+  frame.pathData = nil
+  frame.pathColor = nil
 
   for title, tab in pairs(node) do
     pfMap.highlightdb[frame][title] = true
@@ -822,6 +915,8 @@ function pfMap:UpdateNode(frame, node, color, obj, distance)
       frame.itemreq     = tab.itemreq
       frame.arrow       = tab.arrow
       frame.icon        = tab.icon
+      frame.pathData    = tab.path
+      frame.pathColor   = tab.pathColor
 
       if pfQuest_config["spawncolors"] == "1" then
         frame.color = tab.spawn or tab.title
@@ -829,6 +924,11 @@ function pfMap:UpdateNode(frame, node, color, obj, distance)
         frame.color = tab.title
       end
     end
+  end
+
+  if obj == "minimap" then
+    frame.pathData = nil
+    frame.pathColor = nil
   end
 
   if ( frame.updateTexture or frame.updateVertex or not frame.tex:GetTexture() ) and frame.texture then
@@ -952,9 +1052,11 @@ function pfMap:UpdateNodes()
         -- hide cluster nodes if set
         if pfQuest_config["showcluster"] == "0" and pfMap.pins[i].cluster then
           pfMap.pins[i]:Hide()
+          pfMap:ClearNodePath(pfMap.pins[i])
         -- hide individual quest spawns
         elseif pfQuest_config["showspawn"] == "0" and addon == "PFQUEST" and not pfMap.pins[i].texture then
           pfMap.pins[i]:Hide()
+          pfMap:ClearNodePath(pfMap.pins[i])
         else
           -- populate quest list on map
           for title, node in pairs(pfMap.pins[i].node) do
@@ -968,6 +1070,11 @@ function pfMap:UpdateNodes()
           pfMap.pins[i]:SetPoint("CENTER", WorldMapButton, "TOPLEFT", x, -y)
 
           pfMap.pins[i]:Show()
+          if pfMap.pins[i].pathData and pfQuest_config["showgiverpaths"] ~= "0" then
+            pfMap:DrawNodePath(pfMap.pins[i], map)
+          else
+            pfMap:ClearNodePath(pfMap.pins[i])
+          end
         end
 
         i = i + 1
@@ -977,7 +1084,10 @@ function pfMap:UpdateNodes()
 
   -- hide remaining pins
   for j=i, table.getn(pfMap.pins) do
-    if pfMap.pins[j] then pfMap.pins[j]:Hide() end
+    if pfMap.pins[j] then
+      pfMap.pins[j]:Hide()
+      pfMap:ClearNodePath(pfMap.pins[j])
+    end
   end
 end
 

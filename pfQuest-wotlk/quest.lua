@@ -4,6 +4,16 @@ local _, _, _, client = GetBuildInfo()
 client = client or 11200
 local _G = client == 11200 and getfenv(0) or _G
 
+local function GetQuestLinksModule()
+  if QuestieLoader and QuestieLoader.ImportModule then
+    local ok, module = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieQuestLinks")
+    if ok then
+      return module
+    end
+  end
+  return nil
+end
+
 pfQuest = CreateFrame("Frame")
 pfQuest.icons = {}
 
@@ -69,6 +79,7 @@ pfQuest.queue = {}
 pfQuest.abandon = ""
 pfQuest.questlog = {}
 pfQuest.questlog_tmp = {}
+pfQuest.initialScan = true
 
 local function tsize(tbl)
   if not tbl or not type(tbl) == "table" then return 0 end
@@ -178,6 +189,10 @@ pfQuest:SetScript("OnUpdate", function()
         pfQuest_history[entry[2]] = nil
       else
         pfQuest_history[entry[2]] = { time(), UnitLevel("player") }
+        local soundsModule = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+        if soundsModule and soundsModule.OnQuestCompleted then
+          soundsModule:OnQuestCompleted(entry[1], entry[2])
+        end
       end
 
       if pfQuest_config["trackingmethod"] ~= 4 then
@@ -195,10 +210,18 @@ pfQuest:SetScript("OnUpdate", function()
       if entry[4] == "NEW" then
         pfQuest:Debug("|cff55ff55New Quest: " .. entry[1] .. " (" .. entry[2] .. ")")
         
-        -- Announce quest acceptance if enabled
-        local announceModule = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieAnnounce")
-        if announceModule and announceModule.OnQuestAccepted then
-          announceModule:OnQuestAccepted(entry[1], entry[2], entry[3])
+        -- Announce quest acceptance if enabled (only if not during initial scan)
+        -- entry[5] contains the isInitialScan flag from when the entry was created
+        local wasInitialScan = entry[5] == true
+        if not wasInitialScan then
+          local announceModule = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieAnnounce")
+          if announceModule and announceModule.OnQuestAccepted then
+            announceModule:OnQuestAccepted(entry[1], entry[2], entry[3])
+          end
+          local soundsModule = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieSounds")
+          if soundsModule and soundsModule.OnQuestAccepted then
+            soundsModule:OnQuestAccepted(entry[1], entry[2])
+          end
         end
       else
         pfQuest:Debug("|cffffff55Update Quest: " .. entry[1] .. " (" .. entry[2] .. ")")
@@ -259,6 +282,9 @@ function pfQuest:UpdateQuestlog()
   -- initialize flip flop if not yet defined
   pfQuest.questlog_tmp = pfQuest.questlog_tmp or questlog_flip
 
+  -- Detect if this is the initial scan (questlog is empty)
+  local isInitialScan = pfQuest.initialScan or (tsize(pfQuest.questlog) == 0)
+
   local _, numQuests = GetNumQuestLogEntries()
   local found = 0
   local change = nil
@@ -285,7 +311,7 @@ function pfQuest:UpdateQuestlog()
 
       -- add new quest to the questlog
       if not pfQuest.questlog[questid] then
-        table.insert(pfQuest.queue, { title, questid, qlogid, "NEW" })
+        table.insert(pfQuest.queue, { title, questid, qlogid, "NEW", isInitialScan })
         pfQuest.questlog_tmp[questid] = {
           title = title,
           qlogid = qlogid,
@@ -336,6 +362,11 @@ function pfQuest:UpdateQuestlog()
   -- clear next temporary questlog entries
   for k, v in pairs(pfQuest.questlog_tmp) do
     pfQuest.questlog_tmp[k] = nil
+  end
+  
+  -- Mark initial scan as complete after first successful update
+  if isInitialScan then
+    pfQuest.initialScan = false
   end
   if QuestieLoader and QuestieLoader.ImportModule then
     local tracker = QuestieLoader:ImportModule("QuestieTracker")
@@ -816,7 +847,14 @@ else
     if not quest then return end
     id = tonumber(id)
 
-    -- adjust text color to level color
+    local questLinksModule = GetQuestLinksModule()
+    if questLinksModule and questLinksModule.IsTooltipEnabled and questLinksModule:IsTooltipEnabled() and id and id > 0 then
+      questLinksModule:AppendTooltipLines(ItemRefTooltip, id)
+      ItemRefTooltip.pfQtext = text
+      return
+    end
+
+    -- adjust text color to level color (legacy behaviour)
     if id and id > 0 and pfDB["quests"]["loc"][id] then
       local questlevel = tonumber(pfDB["quests"]["data"][id]["lvl"])
       local color = pfQuestCompat.GetDifficultyColor(questlevel)

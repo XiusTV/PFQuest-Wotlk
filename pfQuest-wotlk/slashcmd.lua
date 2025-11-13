@@ -1,7 +1,7 @@
 -- multi api compat
 local compat = pfQuestCompat
 
-SLASH_PFDB1, SLASH_PFDB2, SLASH_PFDB3, SLASH_PFDB4 = "/db", "/shagu", "/pfquest", "/pfdb"
+SLASH_PFDB1, SLASH_PFDB2, SLASH_PFDB3, SLASH_PFDB4, SLASH_PFDB5 = "/db", "/shagu", "/pfquest", "/pfdb", "/pfq"
 SlashCmdList["PFDB"] = function(input, editbox)
   local params = {}
   local meta = { ["addon"] = "PFDB" }
@@ -26,6 +26,7 @@ SlashCmdList["PFDB"] = function(input, editbox)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db|cffffffff reset |cffcccccc - " .. pfQuest_Loc["Reset Map"])
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db|cffffffff scan |cffcccccc - " .. pfQuest_Loc["Scan the server for custom items"])
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db|cffffffff query |cffcccccc - " .. pfQuest_Loc["Query the server for completed quests"])
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db|cffffffff menu |cffcccccc - Show Questie Menu")
     return
   end
 
@@ -319,6 +320,51 @@ SlashCmdList["PFDB"] = function(input, editbox)
     -- argument: query
   if (arg1 == "query") then
     pfDatabase:QueryServer()
+    return
+  end
+
+  -- argument: nameplate (debug commands)
+  if (arg1 == "nameplate") then
+    local nameplate = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieNameplate")
+    if not nameplate then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555pfQuest: QuestieNameplate module not loaded")
+      return
+    end
+    
+    local subcmd = commandlist[2] or ""
+    if subcmd == "debugscan" then
+      nameplate:DebugScan()
+    elseif subcmd == "debugnames" then
+      nameplate:DebugNameplateNames()
+    elseif subcmd == "debugnpc" then
+      local unitToken = commandlist[3] or "target"
+      nameplate:DebugNPC(unitToken)
+    elseif subcmd == "refresh" then
+      nameplate:RefreshAll()
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccpfQuest: Refreshed all nameplates")
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccpfQuest Nameplate Commands:")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db nameplate debugscan|cffffffff - Scan for visible nameplates")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db nameplate debugnames|cffffffff - List nameplate names")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db nameplate debugnpc <unit>|cffffffff - Debug NPC (default: target)")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffcc/db nameplate refresh|cffffffff - Refresh all nameplates")
+    end
+    return
+  end
+
+  -- argument: menu
+  if (arg1 == "menu") then
+    local config = pfQuest_config or {}
+    if config["enableQuestieMenu"] == "0" then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccpfQuest: Questie Menu is disabled. Enable it in settings.")
+      return
+    end
+    local questieMenu = QuestieLoader and QuestieLoader.ImportModule and QuestieLoader:ImportModule("QuestieMenu")
+    if questieMenu and questieMenu.Show then
+      questieMenu:Show()
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccpfQuest: Questie Menu module not available.")
+    end
     return
   end
 

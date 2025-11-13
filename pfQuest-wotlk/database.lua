@@ -703,6 +703,34 @@ function pfDatabase:SearchMobID(id, meta, maps, prio)
 
   local maps = maps or {}
   local prio = prio or 1
+  local npcWaypoints
+  local addQuestiePaths = meta and meta["QTYPE"] == "NPC_START" and pfQuest_config and pfQuest_config["showgiverpaths"] ~= "0"
+  if addQuestiePaths and QuestieLoader and QuestieLoader.ImportModule then
+    local QuestieDB = QuestieLoader:ImportModule("QuestieDB")
+    if QuestieDB and QuestieDB.GetNPC then
+      local npc = QuestieDB:GetNPC(id)
+      npcWaypoints = npc and npc.waypoints or nil
+      if (not npcWaypoints or not next(npcWaypoints)) and questieWaypointFallbackNpc[id] then
+        local fallbackNpc = QuestieDB:GetNPC(questieWaypointFallbackNpc[id])
+        npcWaypoints = fallbackNpc and fallbackNpc.waypoints or npcWaypoints
+      end
+      if Questie and Questie.Print then
+        local wpCount = 0
+        if npcWaypoints then
+          for _zone, segments in pairs(npcWaypoints) do
+            if type(segments) == "table" then
+              for _, segment in pairs(segments) do
+                if type(segment) == "table" then
+                  wpCount = wpCount + #segment
+                end
+              end
+            end
+          end
+        end
+        Questie:Debug(Questie.DEBUG_INFO, "[pfQuest] SearchMobID path check", id, "fallback", questieWaypointFallbackNpc[id], "waypointCount", wpCount)
+      end
+    end
+  end
 
   for _, data in pairs(units[id]["coords"]) do
     local x, y, zone, respawn = unpack(data)
@@ -721,6 +749,12 @@ function pfDatabase:SearchMobID(id, meta, maps, prio)
       meta["level"] = units[id]["lvl"] or UNKNOWN
       meta["spawntype"] = pfQuest_Loc["Unit"]
       meta["respawn"] = respawn > 0 and SecondsToTime(respawn)
+
+      if npcWaypoints and npcWaypoints[zone] then
+        meta["path"] = meta["path"] or {}
+        meta["path"][zone] = npcWaypoints[zone]
+        meta["pathColor"] = meta["pathColor"] or {1, 0.82, 0, 0.85}
+      end
 
       maps[zone] = maps[zone] and maps[zone] + prio or prio
       pfMap:AddNode(meta)
@@ -1140,7 +1174,14 @@ function pfDatabase:SearchQuestID(id, meta, maps)
       -- items (item drop quest starters)
       if pfQuest_config["hideItemDrops"] ~= "1" and quests[id]["start"]["I"] then
         local items = pfDB["items"]["data"]
-        local units = pfDB["units"]["data"]
+local units = pfDB["units"]["data"]
+
+-- For a few escorts the quest giver itself is stationary while a companion NPC
+-- carries the actual waypoint data in Questie's database. Map those givers to
+-- their roaming partner so we can still render path previews.
+local questieWaypointFallbackNpc = {
+  [11626] = 11625, -- Rigger Gizelton -> Cork Gizelton
+}
         local objects = pfDB["objects"]["data"]
         local refloot = pfDB["refloot"]["data"]
         

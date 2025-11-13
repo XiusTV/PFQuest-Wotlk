@@ -2,6 +2,70 @@ local original_UpdateNodes = pfMap.UpdateNodes
 local continentPins = {}
 local maxContinentPins = 2000 -- guessing here but more is better if possible
 
+local function GetConfigValue(newKey, legacyKey)
+    local config = pfQuest_config
+    if not config then
+        return nil
+    end
+
+    if config[newKey] ~= nil then
+        return config[newKey]
+    end
+
+    if legacyKey and config[legacyKey] ~= nil then
+        return config[legacyKey]
+    end
+
+    return nil
+end
+
+local function IsConfigEnabled(newKey, legacyKey, defaultEnabled)
+    local value = GetConfigValue(newKey, legacyKey)
+    if value == nil then
+        if defaultEnabled == nil then
+            return true
+        end
+        return defaultEnabled
+    end
+
+    return value ~= "0"
+end
+
+local legacyConfigMap = {
+    bronzebeardContinentPins = "continentPins",
+    bronzebeardHideChickenQuests = "hideChickenQuests",
+    bronzebeardHideFelwoodFlowers = "hideFelwoodFlowers",
+    bronzebeardHidePvPQuests = "hidePvPQuests",
+    bronzebeardHideCommissionQuests = "hideCommissionQuests",
+    bronzebeardHideItemDrops = "hideItemDrops",
+}
+
+local function CopyLegacyConfigValues()
+    if not pfQuest_config then
+        return
+    end
+
+    for legacyKey, newKey in pairs(legacyConfigMap) do
+        if pfQuest_config[newKey] == nil and pfQuest_config[legacyKey] ~= nil then
+            pfQuest_config[newKey] = pfQuest_config[legacyKey]
+        end
+    end
+end
+
+local function HasModernConfigEntry(name)
+    if not pfQuest_defconfig then
+        return false
+    end
+
+    for _, entry in ipairs(pfQuest_defconfig) do
+        if entry.config == name then
+            return true
+        end
+    end
+
+    return false
+end
+
 -- ============================================================================
 -- WorldMapArea.dbc to mapData Conversion Formula
 -- ============================================================================
@@ -450,10 +514,7 @@ local function CreateContinentPin(index)
 end
 
 local function IsContinentOverlayEnabled()
-    if not pfQuest_config then
-        return true
-    end
-    return pfQuest_config["bronzebeardContinentPins"] ~= "0"
+    return IsConfigEnabled("continentPins", "bronzebeardContinentPins", true)
 end
 
 function pfMap:UpdateNodes()
@@ -494,7 +555,7 @@ function pfMap:UpdateNodes()
         end
     end
 
-    if pfQuest_config["bronzebeardContinentPins"] == "0" then
+    if not IsContinentOverlayEnabled() then
         return
     end
 
@@ -1025,6 +1086,11 @@ WorldMapButton:SetScript(
 )
 
 local function ExtendPfQuestConfig()
+    if HasModernConfigEntry("hideItemDrops") or HasModernConfigEntry("continentPins") then
+        CopyLegacyConfigValues()
+        return
+    end
+
     table.insert(
         pfQuest_defconfig,
         {
@@ -1124,6 +1190,8 @@ local function ExtendPfQuestConfig()
     pfQuest_config["bronzebeardHidePvPQuests"] = pfQuest_config["bronzebeardHidePvPQuests"] or "1"
     pfQuest_config["bronzebeardHideCommissionQuests"] = pfQuest_config["bronzebeardHideCommissionQuests"] or "0"
     pfQuest_config["bronzebeardHideItemDrops"] = pfQuest_config["bronzebeardHideItemDrops"] or "0"
+
+    CopyLegacyConfigValues()
 end
 
 local f = CreateFrame("Frame")

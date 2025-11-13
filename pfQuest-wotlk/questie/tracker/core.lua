@@ -17,6 +17,10 @@ local TrackerLinePool = QuestieLoader:CreateModule("TrackerLinePool")
 ---@class TrackerFadeTicker
 local TrackerFadeTicker = QuestieLoader:CreateModule("TrackerFadeTicker")
 
+local pendingItemButtonReleaseFrame = nil
+
+local CONTROL_COLUMN_WIDTH = 28
+
 ---@class TrackerUtils
 local TrackerUtils = QuestieLoader:CreateModule("TrackerUtils")
 
@@ -29,6 +33,12 @@ local voiceOverInitialPosition
 local anchorEventFrame
 local fadeHoverCount = 0
 
+local DEFAULT_TRACKER_FADE_ALPHA = 0.12
+local MAX_TRACKER_FADE_ALPHA = 0.35
+
+local math_max = math.max
+local math_min = math.min
+
 local function GetPfConfig()
   pfQuest_config = pfQuest_config or {}
   return pfQuest_config
@@ -37,6 +47,34 @@ end
 local function IsPfConfigEnabled(key)
   local cfg = GetPfConfig()
   return cfg[key] == "1"
+end
+
+local function ComputeTrackerFadeAlpha()
+  local cfg = GetPfConfig()
+  local value = cfg and tonumber(cfg["trackerfadealpha"])
+  if not value then
+    value = DEFAULT_TRACKER_FADE_ALPHA
+  end
+  if value < 0 then
+    value = 0
+  elseif value > MAX_TRACKER_FADE_ALPHA then
+    value = MAX_TRACKER_FADE_ALPHA
+  end
+  return value
+end
+
+local function GetComponentFadeAlpha(multiplier, minClamp)
+  multiplier = multiplier or 2
+  minClamp = minClamp or 0.2
+  local baseAlpha = QuestieTracker and QuestieTracker.GetFadeAlpha and QuestieTracker:GetFadeAlpha() or DEFAULT_TRACKER_FADE_ALPHA
+  local value = baseAlpha * multiplier
+  if minClamp then
+    value = math_max(value, minClamp)
+  end
+  if value > 1 then
+    value = 1
+  end
+  return value
 end
 
 local function GetDurabilityAlertCount()
@@ -92,6 +130,15 @@ local function EnsureConfig()
       Questie.db.profile[key] = value
     end
   end
+end
+
+local function EnsureItemButtonReleaseFrame()
+  if pendingItemButtonReleaseFrame then return end
+  pendingItemButtonReleaseFrame = CreateFrame("Frame")
+  pendingItemButtonReleaseFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+  pendingItemButtonReleaseFrame:SetScript("OnEvent", function()
+    TrackerLinePool:ProcessPendingButtonReleases()
+  end)
 end
 
 function QuestieTracker:SyncProfileFromConfig()
@@ -220,6 +267,10 @@ function QuestieTracker:RefreshFade()
   end
 end
 
+function QuestieTracker:GetFadeAlpha()
+  return ComputeTrackerFadeAlpha()
+end
+
 function QuestieTracker:RegisterFadeTarget(frame, options)
   if TrackerFadeTicker and TrackerFadeTicker.RegisterFrame then
     TrackerFadeTicker:RegisterFrame(frame, options)
@@ -296,6 +347,11 @@ function TrackerBaseFrame.Initialize()
   resizer:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
   resizer:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
   resizer:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+  resizer:SetFrameLevel(frame:GetFrameLevel() + 30)
+  resizer:SetFrameStrata("HIGH")
+  resizer:SetHitRectInsets(-16, -4, -16, -4)
+  resizer:GetHighlightTexture():SetBlendMode("ADD")
+  resizer:GetPushedTexture():SetBlendMode("ADD")
   resizer:SetScript("OnMouseDown", function(self)
     local parent = self:GetParent()
     parent.resizing = true
@@ -331,80 +387,69 @@ function TrackerHeaderFrame.Initialize(parent)
   local frame = CreateFrame("Frame", "QuestieTrackerHeaderFrame", parent)
   frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
   frame:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, 0)
-  frame:SetHeight(24)
+  frame:SetHeight(26)
 
   local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  title:SetPoint("LEFT", frame, "LEFT", 8, 0)
+  title:SetPoint("CENTER", frame, "CENTER", 0, 0)
   title:SetText("|cff33ffccPFQuestie Tracker|r")
 
   frame.collapseButton = CreateHeaderButton(frame, "RIGHT", "Interface\\Buttons\\UI-Panel-CollapseButton-Up")
-  
+
+  local configButton = CreateFrame("Button", nil, frame)
+  configButton:SetSize(20, 20)
+  configButton:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
+  configButton:SetHighlightTexture("Interface\\Buttons\\UI-OptionsButton", "ADD")
+  configButton:SetPushedTexture("Interface\\Buttons\\UI-OptionsButton")
+  configButton:SetPoint("RIGHT", frame.collapseButton, "LEFT", -4, 0)
+  configButton:SetScript("OnClick", function()
+    if pfQuestConfig then
+      if pfQuestConfig:IsShown() then
+        pfQuestConfig:Hide()
+      else
+        pfQuestConfig:Show()
+      end
+    end
+  end)
+  frame.configButton = configButton
+
   -- Add click handler for collapse/minimize functionality
   frame.collapseButton:SetScript("OnClick", function(self)
     local cfg = GetPfConfig()
     local isCollapsed = cfg["trackercollapsed"] == "1"
-    
+
     -- Toggle collapsed state
     cfg["trackercollapsed"] = isCollapsed and "0" or "1"
-    
-    -- Get base frame and current dimensions
+
     local baseFrame = QuestieTracker.baseFrame
     if not baseFrame then return end
-    
-    -- Get the collapse button's position relative to UIParent (screen coordinates)
-    -- This is the anchor point we want to keep fixed
-    local buttonX, buttonY = self:GetRight(), self:GetTop()
-    local uiParentX, uiParentY = UIParent:GetRight(), UIParent:GetTop()
-    local relativeX = buttonX - uiParentX
-    local relativeY = buttonY - uiParentY
-    
+
     if cfg["trackercollapsed"] == "1" then
-      -- Collapse: Hide quest frame and resize base frame to header height only
+      -- Collapse: hide quest frame and shrink base without moving anchors
       if QuestieTracker.questFrame then
         QuestieTracker.questFrame:Hide()
+        if QuestieTracker.questFrame.controlColumn then
+          QuestieTracker.questFrame.controlColumn:Hide()
+        end
       end
-      -- Store original height before collapsing
       if not baseFrame._originalHeight then
         baseFrame._originalHeight = baseFrame:GetHeight()
       end
-      -- Store the button's screen position
-      if not baseFrame._originalButtonPos then
-        baseFrame._originalButtonPos = { relativeX, relativeY }
-      end
-      -- Clear all points and resize, then re-anchor at TOPRIGHT using button position
-      baseFrame:ClearAllPoints()
-      -- Set height first (before anchoring)
-      baseFrame:SetHeight(24)
-      -- Re-anchor at TOPRIGHT using button's screen position (button stays in place)
-      baseFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", relativeX, relativeY)
-      -- Hide resizer when collapsed
+      baseFrame:SetHeight(frame:GetHeight())
       if baseFrame.resizer then
         baseFrame.resizer:Hide()
       end
       self:SetNormalTexture("Interface\\Buttons\\UI-Panel-ExpandButton-Up")
     else
-      -- Expand: Show quest frame and restore base frame height
+      -- Expand: show quest frame and restore prior height
       if QuestieTracker.questFrame then
         QuestieTracker.questFrame:Show()
+        if QuestieTracker.questFrame.controlColumn then
+          QuestieTracker.questFrame.controlColumn:Show()
+        end
       end
-      -- Use stored button position if available, otherwise use current
-      local anchorX, anchorY
-      if baseFrame._originalButtonPos then
-        anchorX, anchorY = baseFrame._originalButtonPos[1], baseFrame._originalButtonPos[2]
-        baseFrame._originalButtonPos = nil
-      else
-        anchorX, anchorY = relativeX, relativeY
-      end
-      -- Clear all points, restore height, then re-anchor at TOPRIGHT (button stays in place)
-      baseFrame:ClearAllPoints()
-      -- Restore original height
-      if baseFrame._originalHeight then
-        baseFrame:SetHeight(baseFrame._originalHeight)
-        baseFrame._originalHeight = nil
-      end
-      -- Re-anchor at TOPRIGHT using button's screen position
-      baseFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", anchorX, anchorY)
-      -- Show resizer when expanded
+      local restoredHeight = baseFrame._originalHeight or Questie.db.profile.trackerHeight or baseFrame:GetHeight()
+      baseFrame:SetHeight(restoredHeight)
+      baseFrame._originalHeight = nil
       if baseFrame.resizer then
         baseFrame.resizer:Show()
       end
@@ -423,20 +468,61 @@ function TrackerQuestFrame.Initialize(parent, header)
   end
 
   local frame = CreateFrame("Frame", "QuestieTrackerQuestFrame", parent)
-  frame:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
-  frame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+  frame:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 6, -6)
+  frame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -(CONTROL_COLUMN_WIDTH + 6), 6)
+
+  frame.bg = frame:CreateTexture(nil, "BACKGROUND")
+  frame.bg:SetColorTexture(0, 0, 0, 1)
+  frame.bg:SetAllPoints()
+  frame.bg:SetAlpha(0.35)
 
   local scroll = CreateFrame("ScrollFrame", "QuestieTrackerScrollFrame", frame, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 0)
+  scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 8, -8)
+  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 8)
 
   local content = CreateFrame("Frame", "QuestieTrackerScrollChild", scroll)
-  local baseWidth = parent:GetWidth()
-  content:SetSize(math.max(200, baseWidth - 30), 200)
+  local baseWidth = parent:GetWidth() - CONTROL_COLUMN_WIDTH - 40
+  content:SetSize(math_max(200, baseWidth), 200)
   scroll:SetScrollChild(content)
+
+  -- Control column for scroll buttons and resizer
+  local controlColumn = CreateFrame("Frame", "QuestieTrackerControlColumn", parent)
+  controlColumn:SetPoint("TOPLEFT", frame, "TOPRIGHT", 4, 0)
+  controlColumn:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -6, 6)
+  controlColumn:SetWidth(CONTROL_COLUMN_WIDTH)
+
+  controlColumn.bg = controlColumn:CreateTexture(nil, "BACKGROUND")
+  controlColumn.bg:SetColorTexture(0, 0, 0, 1)
+  controlColumn.bg:SetAllPoints()
+  controlColumn.bg:SetAlpha(0.3)
+
+  local scrollBar = _G["QuestieTrackerScrollFrameScrollBar"]
+  if scrollBar then
+    scrollBar:ClearAllPoints()
+    scrollBar:SetPoint("TOP", controlColumn, "TOP", 0, -22)
+    scrollBar:SetPoint("BOTTOM", controlColumn, "BOTTOM", 0, 24)
+  end
+
+  local scrollUpButton = _G["QuestieTrackerScrollFrameScrollBarScrollUpButton"]
+  if scrollUpButton then
+    scrollUpButton:ClearAllPoints()
+    scrollUpButton:SetPoint("TOP", controlColumn, "TOP", 0, -2)
+  end
+
+  local scrollDownButton = _G["QuestieTrackerScrollFrameScrollBarScrollDownButton"]
+  if scrollDownButton then
+    scrollDownButton:ClearAllPoints()
+    scrollDownButton:SetPoint("BOTTOM", controlColumn, "BOTTOM", 0, 22)
+  end
+
+  if parent.resizer then
+    parent.resizer:ClearAllPoints()
+    parent.resizer:SetPoint("BOTTOM", controlColumn, "BOTTOM", 0, -2)
+  end
 
   frame.scroll = scroll
   frame.content = content
+  frame.controlColumn = controlColumn
 
   TrackerQuestFrame.frame = frame
   return frame
@@ -448,6 +534,7 @@ function TrackerLinePool.Initialize(container)
   TrackerLinePool.inUse = TrackerLinePool.inUse or {}
   TrackerLinePool.itemButtons = TrackerLinePool.itemButtons or {}
   TrackerLinePool.itemButtonsInUse = TrackerLinePool.itemButtonsInUse or {}
+  TrackerLinePool.pendingCombatButtons = TrackerLinePool.pendingCombatButtons or {}
 end
 
 function QuestieTracker:HandleLineClick(line, button)
@@ -552,14 +639,45 @@ function TrackerLinePool:ReleaseAll()
   wipe(self.inUse)
   
   -- Release all item buttons
+  local inCombat = InCombatLockdown and InCombatLockdown()
   for _, button in ipairs(self.itemButtonsInUse) do
-    button:Hide()
     button.itemId = nil
     button.line = nil
+    if button.count then
+      button.count:Hide()
+    end
     QuestieTracker:UnregisterFadeTarget(button)
-    table.insert(self.itemButtons, button)
+    if inCombat then
+      EnsureItemButtonReleaseFrame()
+      button:SetAlpha(0)
+      button:EnableMouse(false)
+      button.pendingCombatRelease = true
+      table.insert(self.pendingCombatButtons, button)
+    else
+      button:SetAlpha(1)
+      button:EnableMouse(true)
+      button:Hide()
+      table.insert(self.itemButtons, button)
+    end
   end
   wipe(self.itemButtonsInUse)
+end
+
+function TrackerLinePool:ProcessPendingButtonReleases()
+  if not self.pendingCombatButtons or #(self.pendingCombatButtons) == 0 then return end
+  if InCombatLockdown and InCombatLockdown() then return end
+
+  for index = #self.pendingCombatButtons, 1, -1 do
+    local button = self.pendingCombatButtons[index]
+    if button then
+      button.pendingCombatRelease = nil
+      button:SetAlpha(1)
+      button:EnableMouse(true)
+      button:Hide()
+      table.insert(self.itemButtons, button)
+      table.remove(self.pendingCombatButtons, index)
+    end
+  end
 end
 
 local function GetQuestItemButtons(questId, qlogid)
@@ -684,7 +802,7 @@ function TrackerLinePool:GetItemButton()
     end)
     
     -- Register with fade system
-    QuestieTracker:RegisterFadeTarget(button, { minAlpha = 0.35 })
+    QuestieTracker:RegisterFadeTarget(button, { autoMinAlpha = true, multiplier = 2.2, minClamp = 0.3 })
   end
   
   button:Show()
@@ -725,7 +843,17 @@ local function ApplyExtraFrameAlpha(extraFrames, visible)
   if not extraFrames then return end
   for frame, opts in pairs(extraFrames) do
     if frame and frame.SetAlpha then
-      local minAlpha = opts.minAlpha or 0.35
+      local minAlpha
+      if type(opts) == "table" then
+        if opts.autoMinAlpha then
+          minAlpha = GetComponentFadeAlpha(opts.multiplier, opts.minClamp)
+        elseif opts.minAlpha then
+          minAlpha = opts.minAlpha
+        end
+      end
+      if not minAlpha then
+        minAlpha = GetComponentFadeAlpha()
+      end
       local alpha = visible and 1 or minAlpha
       frame:SetAlpha(alpha)
     end
@@ -737,15 +865,30 @@ function TrackerFadeTicker:Apply(forceVisible)
 
   local fadeEnabled = self:IsFadeEnabled() and QuestieTracker:HasQuest()
   local show = forceVisible or not fadeEnabled
+  local fadeAlpha = QuestieTracker:GetFadeAlpha()
+  local fullAlpha = 0.35
 
-  self.frame.bg:SetAlpha(show and 0.35 or 0.12)
+  self.frame.bg:SetAlpha(show and fullAlpha or fadeAlpha)
 
-  if self.frame.resizer then
-    self.frame.resizer:SetAlpha(show and 1 or 0.25)
+  if self.questFrame and self.questFrame.bg then
+    self.questFrame.bg:SetAlpha(show and fullAlpha or fadeAlpha)
   end
 
-  if self.header and self.header.collapseButton then
-    self.header.collapseButton:SetAlpha(show and 1 or 0.4)
+  if self.frame.resizer then
+    self.frame.resizer:SetAlpha(show and 1 or GetComponentFadeAlpha(2, 0.25))
+  end
+
+  if self.header then
+    if self.header.collapseButton then
+      self.header.collapseButton:SetAlpha(show and 1 or GetComponentFadeAlpha(2, 0.25))
+    end
+    if self.header.configButton then
+      self.header.configButton:SetAlpha(show and 1 or GetComponentFadeAlpha(2, 0.25))
+    end
+  end
+
+  if self.questFrame and self.questFrame.controlColumn then
+    self.questFrame.controlColumn:SetAlpha(show and 1 or GetComponentFadeAlpha(2, 0.3))
   end
 
   ApplyExtraFrameAlpha(self.extraFrames, show)
@@ -789,6 +932,9 @@ function TrackerFadeTicker.Initialize(frame, header, questFrame)
     end
     if questFrame.content then
       AttachFadeHooks(questFrame.content)
+    end
+    if questFrame.controlColumn then
+      AttachFadeHooks(questFrame.controlColumn)
     end
   end
 
@@ -872,17 +1018,8 @@ function QuestieTracker.Initialize()
   local cfg = GetPfConfig()
   if cfg["trackercollapsed"] == "1" and header.collapseButton then
     quests:Hide()
-    -- Get the collapse button's position relative to UIParent (screen coordinates)
-    local buttonX, buttonY = header.collapseButton:GetRight(), header.collapseButton:GetTop()
-    local uiParentX, uiParentY = UIParent:GetRight(), UIParent:GetTop()
-    local relativeX = buttonX - uiParentX
-    local relativeY = buttonY - uiParentY
-    
-    -- Clear all points, resize, then re-anchor at TOPRIGHT using button position
-    base:ClearAllPoints()
-    base:SetHeight(24)
-    base:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", relativeX, relativeY)
-    -- Hide resizer when collapsed
+    base._originalHeight = base._originalHeight or Questie.db.profile.trackerHeight or base:GetHeight()
+    base:SetHeight(header:GetHeight())
     if base.resizer then
       base.resizer:Hide()
     end
@@ -955,7 +1092,7 @@ function QuestieTracker:Update()
   TrackerLinePool:ReleaseAll()
 
   local linesDrawn = 0
-  local yOffset = -4
+  local yOffset = -8
 
   local function addLine(text, indent, data)
     indent = indent or 0
@@ -963,6 +1100,10 @@ function QuestieTracker:Update()
     line:ClearAllPoints()
     line:SetPoint("TOPLEFT", self.questFrame.content, "TOPLEFT", indent, yOffset)
     line:SetPoint("TOPRIGHT", self.questFrame.content, "TOPRIGHT", 0, yOffset)
+    -- Reset text anchors to default position (will be adjusted later if needed for buttons)
+    line.text:ClearAllPoints()
+    line.text:SetPoint("TOPLEFT", line, "TOPLEFT", 0, 0)
+    line.text:SetPoint("TOPRIGHT", line, "TOPRIGHT", 0, 0)
     line.text:SetText(text)
     line.data = data
     line:SetHitRectInsets(-indent, 0, 0, 0)
@@ -1051,16 +1192,16 @@ function QuestieTracker:Update()
       -- Calculate button area width (for spacing text properly)
       local buttonAreaWidth = 0
       if #questItems > 0 then
-        local buttonCount = math.min(#questItems, 3)
+        local buttonCount = math_min(#questItems, 3)
         buttonAreaWidth = buttonCount * 18 -- 16px button + 2px spacing each
       end
 
       -- Calculate focus prefix width (approximately 10 pixels for "▶ ")
       local focusPrefixWidth = (focusPrefix and focusPrefix ~= "") and 10 or 0
 
-      -- Apply color to both level number and title together
+      -- Create quest title line (text will be set properly after button positioning)
       -- Format: [focus] [items] [level] Quest Name
-      local questLine = string.format("%s|cff%s%s%s|r", focusPrefix, titleColor, levelText, entry.title)
+      local questLine = string.format("|cff%s%s%s|r", titleColor, levelText, entry.title)
       local titleLine = addLine(questLine, 0, {
         questId = entry.id,
         questTitle = entry.title,
@@ -1114,21 +1255,44 @@ function QuestieTracker:Update()
         titleLine.text:ClearAllPoints()
         local levelAndTitle = string.format("|cff%s%s%s|r", titleColor, levelText, entry.title)
         titleLine.text:SetText(levelAndTitle)
-        titleLine.text:SetPoint("LEFT", titleLine, "LEFT", focusPrefixWidth + buttonAreaWidth, 0)
+        titleLine.text:SetPoint("TOPLEFT", titleLine, "TOPLEFT", focusPrefixWidth + buttonAreaWidth, 0)
+        titleLine.text:SetPoint("BOTTOMRIGHT", titleLine, "BOTTOMRIGHT", 0, 0)
         
         -- If there's a focus prefix, create it as a separate text element at the start
         if focusPrefixWidth > 0 then
           if not titleLine.focusText then
             titleLine.focusText = titleLine:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
           end
+          titleLine.focusText:ClearAllPoints()
           titleLine.focusText:SetText(focusPrefix)
-          titleLine.focusText:SetPoint("LEFT", titleLine, "LEFT", 0, 0)
+          titleLine.focusText:SetPoint("TOPLEFT", titleLine, "TOPLEFT", 0, 0)
+          titleLine.focusText:SetPoint("BOTTOMLEFT", titleLine, "BOTTOMLEFT", 0, 0)
           titleLine.focusText:Show()
         end
       else
-        -- No items: hide focusText if it exists (use normal text display)
+        -- No items: hide focusText if it exists and reset main text anchors
         if titleLine.focusText then
           titleLine.focusText:Hide()
+        end
+        -- Reset main text to account for focus prefix only (no buttons)
+        titleLine.text:ClearAllPoints()
+        if focusPrefixWidth > 0 then
+          -- If there's a focus prefix, position text after it
+          titleLine.text:SetPoint("TOPLEFT", titleLine, "TOPLEFT", focusPrefixWidth, 0)
+          titleLine.text:SetPoint("TOPRIGHT", titleLine, "TOPRIGHT", 0, 0)
+          -- Show focus prefix as separate element
+          if not titleLine.focusText then
+            titleLine.focusText = titleLine:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+          end
+          titleLine.focusText:ClearAllPoints()
+          titleLine.focusText:SetText(focusPrefix)
+          titleLine.focusText:SetPoint("TOPLEFT", titleLine, "TOPLEFT", 0, 0)
+          titleLine.focusText:SetPoint("BOTTOMLEFT", titleLine, "BOTTOMLEFT", 0, 0)
+          titleLine.focusText:Show()
+        else
+          -- No focus prefix, text takes full width
+          titleLine.text:SetPoint("TOPLEFT", titleLine, "TOPLEFT", 0, 0)
+          titleLine.text:SetPoint("TOPRIGHT", titleLine, "TOPRIGHT", 0, 0)
         end
       end
       
@@ -1151,7 +1315,7 @@ function QuestieTracker:Update()
     end
   end
 
-  local contentHeight = math.max(20, linesDrawn * 16 + 20)
+  local contentHeight = math_max(20, linesDrawn * 16 + 20)
   self.questFrame.content:SetHeight(contentHeight)
 
   self.hasActiveQuests = hasEntries
@@ -1176,14 +1340,15 @@ function QuestieTracker:Disable()
 end
 
 function QuestieTracker:OnSizeApplied(width, height, silent)
-  width = math.max(220, width or 0)
-  height = math.max(160, height or 0)
+  width = math_max(220, width or 0)
+  height = math_max(160, height or 0)
 
   Questie.db.profile.trackerWidth = width
   Questie.db.profile.trackerHeight = height
 
   if self.questFrame and self.questFrame.content then
-    self.questFrame.content:SetWidth(math.max(200, width - 30))
+    local contentWidth = math_max(200, width - CONTROL_COLUMN_WIDTH - 40)
+    self.questFrame.content:SetWidth(contentWidth)
   end
 
   self:UpdateAnchoredFrames()
